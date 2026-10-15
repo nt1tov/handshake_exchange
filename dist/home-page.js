@@ -2,8 +2,8 @@ import { brandStory } from './brand-story.js';
 
 const copy = {
   ru: {
-    eyebrow: 'HANDSHAKE · ЛЮДИ ДОГОВАРИВАЮТСЯ',
-    title: 'Обмен начинается с доверия.',
+    eyebrow: 'Сервис поиска прямых обменов',
+    title: 'Обмен через рукопожатие',
     description: 'Встречные заявки клиентов и предложения провайдеров — в одном месте. Выберите, что и как обменять. Мы поможем найти подходящие условия.',
     create: 'Создать заявку',
     provider: 'Кабинет провайдера',
@@ -17,8 +17,8 @@ const copy = {
     ],
   },
   en: {
-    eyebrow: 'HANDSHAKE · PEOPLE FIND COMMON GROUND',
-    title: 'Every exchange starts with trust.',
+    eyebrow: 'Find direct exchanges',
+    title: 'Exchange with a handshake',
     description: 'Matching client requests and provider offers, all in one place. Choose what to exchange and how. We’ll help you find terms that fit.',
     create: 'Create a request',
     provider: 'Provider workspace',
