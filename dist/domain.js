@@ -1,3 +1,6 @@
+import { BANKS } from './bank-catalog.js';
+export { BANKS } from './bank-catalog.js';
+
 export const CURRENCIES = [
   { code: 'RUB', name: 'Российский рубль', symbol: '₽', color: '#3868ed', rateUSD: 95 },
   { code: 'AMD', name: 'Армянский драм', symbol: '֏', color: '#af703f', rateUSD: 390 },
@@ -6,20 +9,7 @@ export const CURRENCIES = [
   { code: 'USD', name: 'Доллар США', symbol: '$', color: '#5c896d', rateUSD: 1 },
   { code: 'GEL', name: 'Грузинский лари', symbol: '₾', color: '#9165b1', rateUSD: 2.72 },
   { code: 'USDC', name: 'USD Coin', symbol: '$', color: '#2775ca', rateUSD: 1 },
-];
-
-export const BANKS = [
-  { id: 'tbank', name: 'Т-Банк', currencies: ['RUB'], kind: 'bank', color: '#f5cf35' },
-  { id: 'sber', name: 'Сбер', currencies: ['RUB'], kind: 'bank', color: '#2aaa4e' },
-  { id: 'alfa', name: 'Альфа-Банк', currencies: ['RUB'], kind: 'bank', color: '#e95252' },
-  { id: 'raiffeisen', name: 'Райффайзен', currencies: ['RUB'], kind: 'bank', color: '#e4cc34' },
-  { id: 'ameria', name: 'Ameriabank', currencies: ['AMD', 'USD', 'EUR'], kind: 'bank', color: '#5f9d3c' },
-  { id: 'acba', name: 'ACBA', currencies: ['AMD', 'USD', 'EUR'], kind: 'bank', color: '#267b5e' },
-  { id: 'idbank', name: 'IDBank', currencies: ['AMD', 'USD', 'EUR'], kind: 'bank', color: '#eb764b' },
-  { id: 'revolut', name: 'Revolut', currencies: ['EUR', 'USD'], kind: 'fintech', color: '#292d39' },
-  { id: 'wise', name: 'Wise', currencies: ['EUR', 'USD', 'GEL'], kind: 'fintech', color: '#9acd66' },
-  { id: 'bog', name: 'Bank of Georgia', currencies: ['GEL', 'USD', 'EUR'], kind: 'bank', color: '#f18a41' },
-  { id: 'tbc', name: 'TBC Bank', currencies: ['GEL', 'USD', 'EUR'], kind: 'bank', color: '#48a6da' },
+  { code: 'AED', name: 'Дирхам ОАЭ', symbol: 'د.إ', color: '#438e7a', rateUSD: 3.6725 },
 ];
 
 export const CITIES = ['Ереван', 'Москва', 'Тбилиси', 'Санкт-Петербург', 'Дубай'];
@@ -27,7 +17,6 @@ export const NETWORKS = ['TRC20', 'ERC20', 'TON', 'Solana'];
 
 const cryptoCurrencies = new Set(['USDT', 'USDC']);
 const networksByCurrency = { USDT: NETWORKS, USDC: ['ERC20', 'Solana'] };
-const tolerance = 0.000001;
 let idCounter = 0;
 
 function makeId(prefix, now = Date.now()) {
@@ -67,6 +56,7 @@ function endpoint(input) {
       const bank = BANKS.find((item) => item.id === input.bank);
       if (!bank || !bank.currencies.includes(input.currency)) throw new Error('Выберите банк, поддерживающий эту валюту.');
       result.bank = bank.id;
+      result.country = bank.country;
     } else {
       if (!CITIES.includes(input.city)) throw new Error('Выберите город передачи наличных.');
       const address = typeof input.address === 'string' ? input.address.trim() : '';
@@ -137,38 +127,124 @@ export function formatAmount(amount) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value);
 }
 
+function currencyStep(code) {
+  return cryptoCurrencies.has(code) ? 0.000001 : 0.01;
+}
+
+function directedRound(amount, code, up = false) {
+  const factor = 1 / currencyStep(code);
+  const scaled = amount * factor;
+  const epsilon = Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4;
+  return (up ? Math.ceil(scaled - epsilon) : Math.floor(scaled + epsilon)) / factor;
+}
+
+function splitExecution(order, value) {
+  const giveAmount = number(roundCurrency(number(value, 'Сумма отправки'), order.give.currency), 'Сумма отправки');
+  if (giveAmount > order.amount) throw new Error('Часть обмена не может превышать сумму заявки.');
+  if (giveAmount < order.amount && order.partial !== true) throw new Error('Клиент разрешил только обмен всей суммы.');
+  const minReceive = giveAmount === order.amount ? order.minReceive
+    : directedRound(order.minReceive * (giveAmount / order.amount), order.receive.currency, true);
+  const remainingAmount = roundCurrency(order.amount - giveAmount, order.give.currency);
+  const remainingMinReceive = roundCurrency(order.minReceive - minReceive, order.receive.currency);
+  if (minReceive <= 0 || (remainingAmount > 0 && remainingMinReceive <= 0)) {
+    throw new Error('Для такой части слишком мал остаток заявки. Выберите другой объём.');
+  }
+  return { giveAmount, minReceive, remainingAmount, remainingMinReceive };
+}
+
+function executionFits(order, giveAmount, receiveAmount) {
+  const split = splitExecution(order, giveAmount);
+  if (!Number.isFinite(receiveAmount) || receiveAmount + currencyStep(order.receive.currency) / 1000 < split.minReceive) {
+    throw new Error('Объём обмена ниже пропорционального минимума заявки.');
+  }
+  return split;
+}
+
+function matchExecution(order, candidate) {
+  if (candidate.id === order.id || candidate.owner === order.owner || candidate.status !== 'searching'
+    || sameCurrency(candidate) || !sameEndpoint(order.give, candidate.receive) || !sameEndpoint(order.receive, candidate.give)) return null;
+  let giveAmount = order.amount;
+  let receiveAmount = candidate.amount;
+  if (order.partial === true) giveAmount = Math.min(order.amount, candidate.minReceive);
+  if (giveAmount < candidate.minReceive) {
+    if (candidate.partial !== true) return null;
+    receiveAmount = directedRound(candidate.amount * (giveAmount / candidate.minReceive), candidate.give.currency);
+  }
+  try {
+    executionFits(order, giveAmount, receiveAmount);
+    executionFits(candidate, receiveAmount, giveAmount);
+    return { giveAmount, receiveAmount };
+  } catch {
+    return null;
+  }
+}
+
 export function findMatch(state, order) {
   if (order.status !== 'searching' || sameCurrency(order)) return null;
-  return state.orders.filter((candidate) => (
-    candidate.id !== order.id
-    && candidate.owner !== order.owner
-    && candidate.status === 'searching'
-    && !sameCurrency(candidate)
-    && sameEndpoint(order.give, candidate.receive)
-    && sameEndpoint(order.receive, candidate.give)
-    && candidate.amount + tolerance >= order.minReceive
-    && order.amount + tolerance >= candidate.minReceive
-  )).sort((first, second) => second.amount - first.amount || first.createdAt - second.createdAt)[0] || null;
+  return state.orders.map(candidate => ({ candidate, execution: matchExecution(order, candidate) }))
+    .filter(item => item.execution)
+    .sort((first, second) => second.execution.receiveAmount - first.execution.receiveAmount
+      || first.execution.giveAmount - second.execution.giveAmount
+      || first.candidate.createdAt - second.candidate.createdAt)[0]?.candidate || null;
 }
 
 function reserveMatch(order, match) {
+  const execution = matchExecution(order, match);
+  if (!execution) throw new Error('Встречная заявка больше не соответствует условиям.');
   order.status = match.status = 'matched';
   order.matchedOrderId = match.id;
-  order.matchedReceive = match.amount;
+  order.matchedGive = execution.giveAmount;
+  order.matchedReceive = execution.receiveAmount;
   match.matchedOrderId = order.id;
-  match.matchedReceive = order.amount;
+  match.matchedGive = execution.receiveAmount;
+  match.matchedReceive = execution.giveAmount;
   for (const item of [order, match]) {
     for (const quote of item.quotes) if (quote.status === 'pending') quote.status = 'declined';
   }
 }
 
+function rematchSearching(state, now = Date.now()) {
+  for (const waiting of state.orders) {
+    if (waiting.owner !== 'me' || waiting.status !== 'searching') continue;
+    const match = findMatch(state, waiting);
+    if (!match) continue;
+    reserveMatch(waiting, match);
+    notify(state, 'match', 'Встречная заявка найдена', 'Условия совпали. Подтвердите обмен в своей заявке.', waiting.id, now);
+  }
+}
+
+function applySplit(state, order, split, now) {
+  if (split.remainingAmount <= 0) return null;
+  const rootOrderId = order.rootOrderId || order.id;
+  const remainder = {
+    id: makeId('HS', now), owner: order.owner, give: { ...order.give }, receive: { ...order.receive },
+    amount: split.remainingAmount, minReceive: split.remainingMinReceive,
+    partial: true, status: 'searching', createdAt: now, quotes: [], rootOrderId, parentOrderId: order.id,
+  };
+  order.rootOrderId = rootOrderId;
+  order.amount = split.giveAmount;
+  order.minReceive = split.minReceive;
+  order.remainderOrderId = remainder.id;
+  state.orders.unshift(remainder);
+  return remainder;
+}
+
+export function orderExecution(order) {
+  const quote = acceptedProviderQuote(order);
+  if (quote) return { giveAmount: quote.giveAmount ?? order.amount, receiveAmount: quote.amount };
+  if (['matched', 'agreed', 'completed'].includes(order.status) && order.matchedOrderId) {
+    return { giveAmount: order.matchedGive ?? order.amount, receiveAmount: order.matchedReceive ?? order.minReceive };
+  }
+  return { giveAmount: order.amount, receiveAmount: order.minReceive };
+}
+
 export function createOrder(state, input, now = Date.now()) {
   const sides = endpoints(input);
-  const amount = number(input.amount, 'Сумма отправки');
-  const minReceive = number(input.minReceive ?? amountFor(amount, sides.give.currency, sides.receive.currency), 'Минимальная сумма получения');
+  const amount = number(roundCurrency(number(input.amount, 'Сумма отправки'), sides.give.currency), 'Сумма отправки');
+  const minReceive = number(roundCurrency(number(input.minReceive ?? amountFor(amount, sides.give.currency, sides.receive.currency), 'Минимальная сумма получения'), sides.receive.currency), 'Минимальная сумма получения');
   const order = {
     id: makeId('HS', now), owner: 'me', ...sides, amount, minReceive,
-    partial: false, status: 'searching', createdAt: now, quotes: [],
+    partial: input.partial === true, status: 'searching', createdAt: now, quotes: [],
   };
   const match = findMatch(state, order);
   if (match) reserveMatch(order, match);
@@ -177,32 +253,58 @@ export function createOrder(state, input, now = Date.now()) {
   return order;
 }
 
-export function acceptMatch(state, orderId) {
+export function acceptMatch(state, orderId, now = Date.now()) {
   const order = getOrder(state, orderId);
   requireDifferentCurrencies(order);
   if (order.status !== 'matched') throw new Error('У этой заявки нет активного совпадения.');
   const match = getOrder(state, order.matchedOrderId);
   requireDifferentCurrencies(match);
-  if (match.status !== 'matched' || match.matchedOrderId !== order.id) throw new Error('Встречная заявка больше недоступна.');
-  order.status = 'agreed';
-  match.status = 'agreed';
-  order.agreedAt = match.agreedAt = Date.now();
+  if (match.status !== 'matched' || match.matchedOrderId !== order.id
+    || !sameEndpoint(order.give, match.receive) || !sameEndpoint(order.receive, match.give)) {
+    throw new Error('Встречная заявка больше недоступна.');
+  }
+  const giveAmount = order.matchedGive ?? order.amount;
+  const receiveAmount = order.matchedReceive ?? match.amount;
+  if (giveAmount !== (match.matchedReceive ?? order.amount) || receiveAmount !== (match.matchedGive ?? match.amount)) {
+    throw new Error('Зарезервированные суммы встречных заявок не совпадают.');
+  }
+  const ownSplit = executionFits(order, giveAmount, receiveAmount);
+  const peerSplit = executionFits(match, receiveAmount, giveAmount);
+  order.status = match.status = 'agreed';
+  order.agreedAt = match.agreedAt = now;
+  applySplit(state, order, ownSplit, now);
+  applySplit(state, match, peerSplit, now);
   for (const item of [order, match]) {
     for (const quote of item.quotes) if (quote.status === 'pending') quote.status = 'declined';
   }
-  notify(state, 'agreement', 'Условия обмена согласованы', 'Демо-сделка зафиксирована. Реальное движение денег не выполняется.', order.id);
+  notify(state, 'agreement', 'Условия обмена согласованы', 'Демо-сделка зафиксирована. Реальное движение денег не выполняется.', order.id, now);
+  rematchSearching(state, now);
   return order;
 }
 
+function directionEndpointsFit(direction, order) {
+  return Boolean(direction?.active && order.status === 'searching' && !sameCurrency(direction) && !sameCurrency(order)
+    && sameEndpoint(direction.give, order.receive) && sameEndpoint(direction.receive, order.give));
+}
+
 export function isDirectionCompatible(direction, order) {
-  if (!direction.active || order.status !== 'searching' || sameCurrency(direction) || sameCurrency(order)) return false;
-  if (!sameEndpoint(direction.give, order.receive) || !sameEndpoint(direction.receive, order.give)) return false;
-  const amount = order.minReceive ?? amountFor(order.amount, order.give.currency, order.receive.currency);
-  return amount + tolerance >= direction.min && amount <= direction.max + tolerance && amount <= direction.available + tolerance;
+  if (!directionEndpointsFit(direction, order)) return false;
+  const capacity = Math.min(direction.max, direction.available);
+  if (!Number.isFinite(capacity) || capacity <= 0 || direction.min > capacity) return false;
+  if (order.minReceive <= capacity) return true;
+  if (order.partial !== true) return false;
+  try {
+    const giveAmount = directedRound(order.amount * (capacity / order.minReceive), order.give.currency);
+    return splitExecution(order, giveAmount).minReceive <= capacity;
+  } catch {
+    return false;
+  }
 }
 
 function canQuoteAmount(direction, order, amount) {
-  return direction && isDirectionCompatible(direction, order)
+  const tolerance = currencyStep(order.receive.currency) / 1000;
+  return directionEndpointsFit(direction, order)
+    && Number.isFinite(amount)
     && amount + tolerance >= direction.min
     && amount <= direction.max + tolerance
     && amount <= direction.available + tolerance;
@@ -216,16 +318,17 @@ export function submitQuote(state, orderId, input, now = Date.now()) {
   const values = input && typeof input === 'object' && !Array.isArray(input) ? input : { amount: input };
   const inputMode = values.inputMode ?? 'amount';
   if (!['amount', 'rate'].includes(inputMode)) throw new Error('Выберите ввод суммы или курса.');
+  const split = splitExecution(order, values.giveAmount === undefined ? order.amount : values.giveAmount);
   const enteredRate = inputMode === 'rate' ? number(values.rate, 'Курс') : null;
-  const rawAmount = inputMode === 'rate' ? number(order.amount * enteredRate, 'Сумма предложения') : number(values.amount, 'Сумма предложения');
+  const rawAmount = inputMode === 'rate' ? number(split.giveAmount * enteredRate, 'Сумма предложения') : number(values.amount, 'Сумма предложения');
   const quoteAmount = number(roundCurrency(rawAmount, order.receive.currency), 'Сумма предложения');
   const incomeUSDT = number(values.incomeUSDT ?? 0, 'Доход в USDT', true);
-  if (quoteAmount + tolerance < order.minReceive) throw new Error('Предложение ниже минимальной суммы, указанной клиентом.');
+  if (quoteAmount + currencyStep(order.receive.currency) / 1000 < split.minReceive) throw new Error('Предложение ниже минимальной суммы, указанной клиентом для выбранной части.');
   const direction = state.directions.find((item) => canQuoteAmount(item, order, quoteAmount));
   if (!direction) throw new Error('Нет активного направления с подходящими условиями и достаточным остатком.');
   const quote = {
-    id: makeId('quote', now), directionId: direction.id, amount: quoteAmount,
-    rate: enteredRate ?? quoteAmount / order.amount, effectiveRate: quoteAmount / order.amount,
+    id: makeId('quote', now), directionId: direction.id, amount: quoteAmount, giveAmount: split.giveAmount,
+    rate: enteredRate ?? quoteAmount / split.giveAmount, effectiveRate: quoteAmount / split.giveAmount,
     inputMode, incomeUSDT: roundCurrency(incomeUSDT, 'USDT'),
     expiresAt: now + 5 * 60 * 1000, status: 'pending',
   };
@@ -242,12 +345,13 @@ export function acceptQuote(state, orderId, quoteId, now = Date.now()) {
   const quote = order.quotes.find((item) => item.id === quoteId);
   if (!quote || quote.status !== 'pending') throw new Error('Предложение больше недоступно.');
   if (quote.expiresAt <= now) throw new Error('Срок действия цены истёк. Запросите новое предложение.');
+  const split = executionFits(order, quote.giveAmount ?? order.amount, quote.amount);
   const direction = state.directions.find((item) => item.id === quote.directionId);
   requireDifferentCurrencies(direction);
   if (!canQuoteAmount(direction, order, quote.amount)) throw new Error('Объём провайдера больше недоступен. Запросите новое предложение.');
   const collateral = state.collateral ?? { totalUSDT: 10000, reservedUSDT: 0 };
   const requiredUSDT = amountFor(quote.amount, order.receive.currency, 'USDT');
-  if (requiredUSDT > collateral.totalUSDT - collateral.reservedUSDT + tolerance) throw new Error('Недостаточно свободного демо-обеспечения провайдера.');
+  if (requiredUSDT > collateral.totalUSDT - collateral.reservedUSDT + currencyStep('USDT') / 1000) throw new Error('Недостаточно свободного демо-обеспечения провайдера.');
   state.collateral = collateral;
   collateral.reservedUSDT = roundCurrency(collateral.reservedUSDT + requiredUSDT, 'USDT');
   direction.available = Number((direction.available - quote.amount).toFixed(6));
@@ -257,7 +361,9 @@ export function acceptQuote(state, orderId, quoteId, now = Date.now()) {
   order.collateralReservedUSDT = requiredUSDT;
   order.settlement = { providerSentAt: null, clientReceivedAt: null };
   for (const item of order.quotes) item.status = item.id === quote.id ? 'accepted' : 'declined';
+  applySplit(state, order, split, now);
   notify(state, 'agreement', 'Предложение принято', 'Условия демо-сделки зафиксированы, объём зарезервирован.', order.id, now);
+  rematchSearching(state, now);
   return order;
 }
 
@@ -265,10 +371,28 @@ function acceptedProviderQuote(order) {
   return order.acceptedQuoteId ? order.quotes.find((quote) => quote.id === order.acceptedQuoteId && quote.status === 'accepted') : null;
 }
 
+export const PROBLEM_REASONS = ['not-received', 'wrong-amount', 'wrong-details', 'other'];
+
+export function reportProblem(state, orderId, input, now = Date.now()) {
+  const order = getOrder(state, orderId);
+  if (order.status !== 'agreed') throw new Error('Сообщить о проблеме можно только по согласованной незавершённой сделке.');
+  const peer = state.orders.find(item => item.id === order.matchedOrderId);
+  if (order.problem?.status === 'open' || peer?.problem?.status === 'open') throw new Error('Проблема по этой сделке уже зафиксирована.');
+  if (!PROBLEM_REASONS.includes(input?.reason)) throw new Error('Выберите причину проблемы.');
+  const comment = typeof input.comment === 'string' ? input.comment.trim() : '';
+  if (comment.length < 10 || comment.length > 1000) throw new Error('Опишите проблему: от 10 до 1000 символов.');
+  order.problem = { id: makeId('problem', now), status: 'open', type: input.reason, comment, createdAt: now };
+  const noticeOrder = order.owner === 'me' ? order : peer?.owner === 'me' ? peer : order;
+  notify(state, 'problem', 'Проблема зафиксирована в демо', 'Подтверждение расчёта остановлено. Запись сохранена в этом браузере; обращение в реальную поддержку не отправлялось.', noticeOrder.id, now);
+  return order;
+}
+
 export function confirmSettlement(state, orderId, actor, now = Date.now()) {
   const order = getOrder(state, orderId);
   if (!['provider', 'client'].includes(actor)) throw new Error('Выберите сторону подтверждения: клиент или провайдер.');
   if (order.status !== 'agreed') throw new Error('Подтверждение доступно только для согласованной незавершённой сделки.');
+  const linkedPeer = state.orders.find(item => item.id === order.matchedOrderId);
+  if (order.problem?.status === 'open' || linkedPeer?.problem?.status === 'open') throw new Error('Расчёт остановлен: по сделке открыта проблема.');
   const quote = acceptedProviderQuote(order);
   if (!quote) {
     if (actor !== 'client') throw new Error('Прямой обмен подтверждает клиент, провайдер не участвует.');
@@ -325,11 +449,14 @@ export function migrateState(state) {
   }
   for (const order of state.orders) {
     order.quotes ??= [];
+    order.partial = order.partial === true;
+    if (order.matchedOrderId && ['matched', 'agreed', 'completed'].includes(order.status)) order.matchedGive ??= order.amount;
     for (const quote of order.quotes) {
+      quote.giveAmount ??= order.amount;
       quote.incomeUSDT ??= 0;
       quote.inputMode ??= 'amount';
-      quote.rate ??= quote.amount / order.amount;
-      quote.effectiveRate ??= quote.amount / order.amount;
+      quote.rate ??= quote.amount / quote.giveAmount;
+      quote.effectiveRate ??= quote.amount / quote.giveAmount;
     }
     const quote = acceptedProviderQuote(order);
     if (quote && order.status === 'agreed') {
@@ -345,12 +472,14 @@ export function migrateState(state) {
     for (const quote of order.quotes) if (quote.status === 'pending') quote.status = 'declined';
     cancelledIds.add(order.id);
     delete order.matchedOrderId;
+    delete order.matchedGive;
     delete order.matchedReceive;
   }
   for (const order of state.orders) {
     if (order.status !== 'matched' || !cancelledIds.has(order.matchedOrderId)) continue;
     order.status = 'searching';
     delete order.matchedOrderId;
+    delete order.matchedGive;
     delete order.matchedReceive;
   }
   for (const direction of state.directions) {
@@ -372,21 +501,17 @@ export function cancelOrder(state, orderId) {
     if (match?.status === 'matched' && match.matchedOrderId === order.id) {
       match.status = 'searching';
       delete match.matchedOrderId;
+      delete match.matchedGive;
       delete match.matchedReceive;
     }
   }
   order.status = 'cancelled';
   delete order.matchedOrderId;
+  delete order.matchedGive;
   delete order.matchedReceive;
   for (const quote of order.quotes) if (quote.status === 'pending') quote.status = 'declined';
   notify(state, 'cancel', 'Заявка отменена', 'Поиск остановлен, зарезервированная встречная заявка освобождена.', order.id);
-  for (const waiting of state.orders) {
-    if (waiting.owner !== 'me' || waiting.status !== 'searching') continue;
-    const match = findMatch(state, waiting);
-    if (!match) continue;
-    reserveMatch(waiting, match);
-    notify(state, 'match', 'Встречная заявка найдена', 'Условия совпали. Подтвердите обмен в своей заявке.', waiting.id);
-  }
+  rematchSearching(state);
   return order;
 }
 
@@ -424,7 +549,7 @@ export function seedState() {
   const completedOrder = (id, give, receive, amount, incomeUSDT, directionId, minutes) => {
     const result = order(id, 'me', give, receive, amount, minutes);
     const completedAt = now - (minutes - 10) * 60000;
-    const quote = { id: `quote-${id}`, directionId, amount: result.minReceive, rate: result.minReceive / amount, effectiveRate: result.minReceive / amount, inputMode: 'amount', incomeUSDT, expiresAt: completedAt, status: 'accepted' };
+    const quote = { id: `quote-${id}`, directionId, amount: result.minReceive, giveAmount: amount, rate: result.minReceive / amount, effectiveRate: result.minReceive / amount, inputMode: 'amount', incomeUSDT, expiresAt: completedAt, status: 'accepted' };
     return { ...result, status: 'completed', acceptedQuoteId: quote.id, quotes: [quote], agreedAt: now - (minutes - 2) * 60000, completedAt, settlement: { providerSentAt: completedAt - 60000, clientReceivedAt: completedAt }, collateralReservedUSDT: amountFor(quote.amount, receive.currency, 'USDT'), collateralReleasedAt: completedAt };
   };
   return {

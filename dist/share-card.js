@@ -1,5 +1,5 @@
 import { BANKS, CITIES, CURRENCIES, NETWORKS } from './domain.js';
-import { formatNumber } from './i18n.js';
+import { formatNumber } from './i18n.js?v=20261015-flows';
 
 const copy = {
   ru: {
@@ -8,10 +8,10 @@ const copy = {
     bank: 'Банковский перевод', cash: 'Наличные', crypto: 'Криптовалюта', network: 'Сеть',
     geography: 'ГЕОГРАФИЯ ОБМЕНА', online: 'Онлайн · банковский или криптоперевод',
     meeting: 'МЕСТО ВСТРЕЧИ', giveAddress: 'Передача', receiveAddress: 'Получение',
-    status: 'Статус', snapshot: 'Снимок', city: 'Город',
+    status: 'Статус', snapshot: 'Снимок', city: 'Город', partial: 'Можно частями',
     note: 'Условия на момент создания карточки. Актуальность уточняйте перед обменом.',
     unavailable: 'Не указано', unknown: 'В работе',
-    statuses: { searching: 'Ищем встречный обмен', matched: 'Совпадение найдено', agreed: 'Условия согласованы', cancelled: 'Заявка отменена', completed: 'Обмен завершён' },
+    statuses: { searching: 'Открыта', matched: 'Открыта', agreed: 'В процессе', cancelled: 'Отменена', completed: 'Состоялась' },
   },
   en: {
     request: 'EXCHANGE REQUEST', give: 'I GIVE', receive: 'I RECEIVE', minimum: 'I RECEIVE AT LEAST',
@@ -19,15 +19,15 @@ const copy = {
     bank: 'Bank transfer', cash: 'Cash', crypto: 'Crypto', network: 'Network',
     geography: 'EXCHANGE LOCATION', online: 'Online · bank or crypto transfer',
     meeting: 'MEETING POINT', giveAddress: 'Giving', receiveAddress: 'Receiving',
-    status: 'Status', snapshot: 'Snapshot', city: 'City',
+    status: 'Status', snapshot: 'Snapshot', city: 'City', partial: 'Partial fills allowed',
     note: 'Terms when this card was created. Confirm availability before exchanging.',
     unavailable: 'Not specified', unknown: 'In progress',
-    statuses: { searching: 'Looking for a match', matched: 'Match found', agreed: 'Terms agreed', cancelled: 'Request cancelled', completed: 'Exchange completed' },
+    statuses: { searching: 'Open', matched: 'Open', agreed: 'In progress', cancelled: 'Cancelled', completed: 'Completed' },
   },
 };
 
 const englishCities = { 'Ереван': 'Yerevan', 'Москва': 'Moscow', 'Тбилиси': 'Tbilisi', 'Санкт-Петербург': 'Saint Petersburg', 'Дубай': 'Dubai' };
-const englishBanks = { tbank: 'T-Bank', sber: 'Sber', alfa: 'Alfa-Bank', raiffeisen: 'Raiffeisen' };
+const englishBanks = { tbank: 'T-Bank', sber: 'Sber', alfa: 'Alfa-Bank', raiffeisen: 'Raiffeisen', yandexpay: 'Yandex Pay' };
 const clean = (value, maximum = 240) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maximum) : '';
 const positive = value => (typeof value === 'number' || typeof value === 'string') && Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
 
@@ -61,8 +61,9 @@ export function buildCardData(order, { language = 'ru', includeAddress = false, 
   const source = order && typeof order === 'object' ? order : {};
   const accepted = Array.isArray(source.quotes) ? source.quotes.find(quote => quote?.status === 'accepted' && (!source.acceptedQuoteId || quote.id === source.acceptedQuoteId) && positive(quote.amount) !== null) : undefined;
   const matchedAmount = ['matched', 'agreed', 'completed'].includes(source.status) ? positive(source.matchedReceive) : null;
+  const matchedGive = ['matched', 'agreed', 'completed'].includes(source.status) ? positive(source.matchedGive) : null;
   const fixedAmount = positive(accepted?.amount) ?? matchedAmount;
-  const give = cardEndpoint(source.give, source.amount, lang, includeAddress === true);
+  const give = cardEndpoint(source.give, positive(accepted?.giveAmount) ?? matchedGive ?? source.amount, lang, includeAddress === true);
   const receive = cardEndpoint(source.receive, fixedAmount ?? source.minReceive, lang, includeAddress === true);
   const id = typeof source.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(source.id) ? source.id : 'HS';
   const statusKey = Object.hasOwn(text.statuses, source.status) ? source.status : 'unknown';
@@ -74,6 +75,7 @@ export function buildCardData(order, { language = 'ru', includeAddress = false, 
     ...(give.address ? [{ label: text.giveAddress, city: give.city, value: give.address }] : []),
     ...(receive.address ? [{ label: text.receiveAddress, city: receive.city, value: receive.address }] : []),
   ];
+  const partial = source.partial === true;
   const caption = [
     `Handshake · ${id}`,
     `${text.giveCaption}: ${give.amountText} ${give.currency} · ${give.methodLabel} · ${give.detail}`,
@@ -81,10 +83,11 @@ export function buildCardData(order, { language = 'ru', includeAddress = false, 
     ...(cities.length ? [`${text.city}: ${cities.join(' / ')}`] : []),
     ...addresses.map(item => `${item.label}${item.city ? ` · ${item.city}` : ''}: ${item.value}`),
     `${text.status}: ${status}`,
+    ...(partial ? [text.partial] : []),
     `${text.snapshot}: ${snapshot}`,
     text.note,
   ].join('\n');
-  return { language: lang, id, give, receive, minimum: fixedAmount === null, statusKey, status, snapshot, cities, addresses, caption };
+  return { language: lang, id, give, receive, minimum: fixedAmount === null, partial, statusKey, status, snapshot, cities, addresses, caption };
 }
 
 const palette = { background: '#16191f', panel: '#222730', receive: '#302b3b', border: '#39404b', purpleBorder: '#635176', ink: '#f4f5f1', muted: '#acb4c1', purple: '#c7b0ef', lime: '#ccf288' };
@@ -209,6 +212,12 @@ export async function createOrderCard(order, options = {}) {
   font(context, 38, 650);
   write(context, '.', 127 + context.measureText('handshake').width, 93, 38, palette.lime, 650);
   write(context, text.request, 56, 169, 18, palette.muted, 550);
+  if (data.partial) {
+    font(context, 16, 500);
+    const partialWidth = context.measureText(text.partial).width + 28;
+    roundRect(context, 340, 139, partialWidth, 36, 11, palette.receive, palette.purpleBorder);
+    write(context, text.partial, 354, 163, 16, palette.purple, 500);
+  }
   font(context, 17, 500);
   const statusWidth = context.measureText(data.status).width + 50;
   const statusX = 1144 - statusWidth;

@@ -30,6 +30,12 @@ test('private provider, contact, KYC and settlement details never enter card dat
   const source = order({
     provider: { name: 'PRIVATE_PROVIDER', margin: 'PRIVATE_MARGIN' },
     contact: 'PRIVATE_CONTACT', kyc: 'PRIVATE_KYC', accountNumber: 'PRIVATE_ACCOUNT',
+    paymentDetails: {
+      give: { endpoint: { private: 'PRIVATE_ENDPOINT' }, values: { holder: 'PRIVATE_HOLDER', account: 'PRIVATE_ACCOUNT', wallet: 'PRIVATE_WALLET', memo: 'PRIVATE_MEMO' }, savedAt: now },
+      receive: { values: { meetingPlace: 'PRIVATE_EXACT_MEETING', meetingTime: 'PRIVATE_MEETING_TIME' } },
+    },
+    problem: { description: 'PRIVATE_DISPUTE_TEXT', contact: 'PRIVATE_DISPUTE_CONTACT' },
+    problems: [{ message: 'PRIVATE_ISSUE_MESSAGE' }],
     give: { currency: 'USDT', method: 'crypto', network: 'TRC20', address: 'PRIVATE_WALLET', wallet: 'PRIVATE_WALLET' },
     receive: { currency: 'AMD', method: 'cash', city: 'Ереван', address: 'Public meeting point', contact: 'PRIVATE_CONTACT' },
     quotes: [{ id: 'quote-1', amount: 390500, status: 'accepted', providerName: 'PRIVATE_PROVIDER', commission: 'PRIVATE_COMMISSION' }],
@@ -67,9 +73,46 @@ test('English cards localize cities, banks, methods and status without changing 
   assert.equal(data.give.detail, 'T-Bank');
   assert.equal(data.give.methodLabel, 'Bank transfer');
   assert.deepEqual(data.cities, ['Dubai']);
-  assert.equal(data.status, 'Looking for a match');
+  assert.equal(data.status, 'Open');
   assert.ok(!/[А-Яа-яЁё]/.test(data.caption));
   assert.equal(JSON.stringify(source), before);
+});
+
+test('partial exchanges share the committed amounts and a partial-fill label', () => {
+  const matched = buildCardData(order({ partial: true, status: 'matched', matchedGive: 400, matchedReceive: 156000 }), { now });
+  assert.equal(matched.give.amount, 400);
+  assert.equal(matched.receive.amount, 156000);
+  assert.equal(matched.partial, true);
+  assert.ok(matched.caption.includes('Можно частями'));
+  const accepted = buildCardData(order({ partial: true, status: 'agreed', matchedGive: 400, matchedReceive: 156000,
+    acceptedQuoteId: 'q-1', quotes: [{ id: 'q-1', status: 'accepted', giveAmount: 300, amount: 117500 }],
+  }), { language: 'en', now });
+  assert.equal(accepted.give.amount, 300);
+  assert.equal(accepted.receive.amount, 117500);
+  assert.ok(accepted.caption.includes('Partial fills allowed'));
+  assert.ok(accepted.caption.includes('I give: 300 USDT'));
+});
+
+test('searching cards ignore stale matched quantities and malformed partial flags', () => {
+  const searching = buildCardData(order({ partial: 'true', matchedGive: 50 }), { language: 'en', now });
+  assert.equal(searching.give.amount, 1000);
+  assert.equal(searching.partial, false);
+  assert.ok(!searching.caption.includes('Partial fills allowed'));
+  for (const matchedGive of [0, -1, NaN, Infinity]) {
+    assert.equal(buildCardData(order({ status: 'matched', matchedGive }), { now }).give.amount, 1000);
+  }
+});
+
+test('share cards use the same simplified exchange statuses in both languages', () => {
+  const statuses = [
+    ['searching', 'Открыта', 'Open'], ['matched', 'Открыта', 'Open'],
+    ['agreed', 'В процессе', 'In progress'], ['completed', 'Состоялась', 'Completed'],
+    ['cancelled', 'Отменена', 'Cancelled'],
+  ];
+  for (const [status, ru, en] of statuses) {
+    assert.equal(buildCardData(order({ status }), { language: 'ru', now }).status, ru);
+    assert.equal(buildCardData(order({ status }), { language: 'en', now }).status, en);
+  }
 });
 
 test('card boundary rejects unknown endpoint data and invalid numeric values', () => {

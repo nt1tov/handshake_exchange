@@ -4,7 +4,7 @@ import {
   seedState, createOrder, findMatch, acceptMatch, cancelOrder,
   submitQuote, acceptQuote, addDirection, isDirectionCompatible, amountFor,
   confirmSettlement, providerMetrics, migrateState,
-  toggleDirection,
+  toggleDirection, orderExecution, reportProblem, CURRENCIES, BANKS,
 } from '../dist/domain.js';
 
 const input = () => ({
@@ -502,4 +502,329 @@ test('every seeded order and pool exchanges different currencies with matching e
   assert.equal(request.give.currency, 'USD');
   assert.equal(request.receive.currency, 'EUR');
   assert.equal(isDirectionCompatible(direction, request), true);
+});
+
+const partialInput = (partial = true) => ({
+  give: { currency: 'USD', method: 'bank', bank: 'revolut' },
+  receive: { currency: 'EUR', method: 'cash', city: 'Дубай', address: 'Демо: Dubai Mall, вход 1' },
+  amount: 100, minReceive: 90, partial,
+});
+const partialState = () => ({ version: 2, orders: [], directions: [], notifications: [], collateral: { totalUSDT: 10000, reservedUSDT: 0 } });
+const partialPeer = (amount = 45, minReceive = 50, partial = false, id = 'partial-peer') => ({
+  id, owner: 'peer', give: { ...partialInput().receive }, receive: { ...partialInput().give },
+  amount, minReceive, partial, status: 'searching', createdAt: 1, quotes: [],
+});
+const partialDirection = (state, changes = {}) => addDirection(state, {
+  give: partialInput().receive, receive: partialInput().give, min: 1, max: 1000, available: 2000, ...changes,
+});
+
+test('partial direct reservation does not resize orders, and acceptance preserves both asset totals', () => {
+  const state = partialState();
+  const peer = partialPeer();
+  state.orders.push(peer);
+  const order = createOrder(state, partialInput(), 100);
+  assert.equal(order.partial, true);
+  assert.equal(order.status, 'matched');
+  assert.deepEqual(orderExecution(order), { giveAmount: 50, receiveAmount: 45 });
+  assert.equal(order.amount, 100);
+  assert.equal(order.minReceive, 90);
+  assert.equal(state.orders.length, 2);
+  acceptMatch(state, order.id, 200);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.equal(order.amount, 50);
+  assert.equal(order.minReceive, 45);
+  assert.equal(remainder.amount, 50);
+  assert.equal(remainder.minReceive, 45);
+  assert.equal(remainder.status, 'searching');
+  assert.equal(remainder.partial, true);
+  assert.equal(remainder.rootOrderId, order.id);
+  assert.equal(remainder.parentOrderId, order.id);
+  assert.equal(order.rootOrderId, order.id);
+  assert.deepEqual(remainder.quotes, []);
+  assert.equal(order.amount + remainder.amount, 100);
+  assert.equal(order.minReceive + remainder.minReceive, 90);
+  assert.equal(peer.amount, 45);
+  assert.equal(peer.minReceive, 50);
+  assert.deepEqual(orderExecution(peer), { giveAmount: 45, receiveAmount: 50 });
+  const before = JSON.stringify(state);
+  assert.throws(() => acceptMatch(state, order.id), /нет активного/);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test('partial false on either side forbids resizing that side', () => {
+  const fullOwn = partialState();
+  fullOwn.orders.push(partialPeer());
+  assert.equal(createOrder(fullOwn, partialInput(false)).status, 'searching');
+  const fullPeer = partialState();
+  fullPeer.orders.push(partialPeer(180, 200, false));
+  assert.equal(createOrder(fullPeer, partialInput(true)).status, 'searching');
+  const flexiblePeer = partialState();
+  const peer = partialPeer(180, 200, true);
+  flexiblePeer.orders.push(peer);
+  const order = createOrder(flexiblePeer, partialInput(false));
+  assert.equal(order.status, 'matched');
+  assert.deepEqual(orderExecution(order), { giveAmount: 100, receiveAmount: 90 });
+  assert.equal(peer.amount, 180);
+  acceptMatch(flexiblePeer, order.id);
+  const remainder = flexiblePeer.orders.find(item => item.id === peer.remainderOrderId);
+  assert.equal(order.remainderOrderId, undefined);
+  assert.equal(peer.amount + remainder.amount, 180);
+  assert.equal(peer.minReceive + remainder.minReceive, 200);
+});
+
+test('cancelling a partial reserve restores the unmodified peer without creating remainders', () => {
+  const state = partialState();
+  const peer = partialPeer(180, 200, true);
+  state.orders.push(peer);
+  const order = createOrder(state, partialInput());
+  cancelOrder(state, order.id);
+  assert.equal(state.orders.length, 2);
+  assert.equal(order.amount, 100);
+  assert.equal(order.minReceive, 90);
+  assert.equal(peer.amount, 180);
+  assert.equal(peer.minReceive, 200);
+  assert.equal(peer.status, 'searching');
+  for (const item of [order, peer]) {
+    assert.equal(item.matchedOrderId, undefined);
+    assert.equal(item.matchedGive, undefined);
+    assert.equal(item.matchedReceive, undefined);
+    assert.equal(item.remainderOrderId, undefined);
+  }
+});
+
+test('a peer remainder rematches another waiting client exactly once after the first acceptance', () => {
+  const state = partialState();
+  const peer = partialPeer(180, 200, true);
+  state.orders.push(peer);
+  const first = createOrder(state, partialInput(false));
+  const second = createOrder(state, partialInput(false));
+  const third = createOrder(state, partialInput(false));
+  assert.equal(second.status, 'searching');
+  acceptMatch(state, first.id, 1000);
+  const remainder = state.orders.find(item => item.id === peer.remainderOrderId);
+  const next = [second, third].filter(item => item.status === 'matched');
+  assert.equal(next.length, 1);
+  assert.equal(remainder.matchedOrderId, next[0].id);
+  assert.equal(next[0].matchedOrderId, remainder.id);
+  acceptMatch(state, next[0].id, 2000);
+  assert.equal(state.orders.filter(item => item.owner === 'peer').reduce((sum, item) => sum + item.amount, 0), 180);
+  assert.equal(state.orders.filter(item => item.owner === 'peer').reduce((sum, item) => sum + item.minReceive, 0), 200);
+  assert.equal(state.orders.filter(item => item.owner === 'me' && item.status === 'searching').length, 1);
+});
+
+test('partial matching chooses the actual largest received amount, not the unsplit peer headline', () => {
+  const state = partialState();
+  const large = partialPeer(900, 1000, true, 'large');
+  const better = partialPeer(95, 100, false, 'better');
+  state.orders.push(large, better);
+  const order = createOrder(state, partialInput());
+  assert.equal(order.matchedOrderId, better.id);
+  assert.deepEqual(orderExecution(order), { giveAmount: 100, receiveAmount: 95 });
+});
+
+test('partial quote uses its chosen give amount for rates and keeps the pending request unchanged', () => {
+  const state = partialState();
+  partialDirection(state);
+  const order = createOrder(state, partialInput());
+  const quote = submitQuote(state, order.id, { giveAmount: 40, inputMode: 'rate', rate: 0.92, incomeUSDT: 2 }, 1000);
+  assert.equal(quote.giveAmount, 40);
+  assert.equal(quote.amount, 36.8);
+  assert.equal(quote.effectiveRate, 36.8 / 40);
+  assert.deepEqual(orderExecution(order), { giveAmount: 100, receiveAmount: 90 });
+  assert.equal(state.orders.length, 1);
+  const available = state.directions[0].available;
+  acceptQuote(state, order.id, quote.id, 2000);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.deepEqual(orderExecution(order), { giveAmount: 40, receiveAmount: 36.8 });
+  assert.equal(order.amount, 40);
+  assert.equal(order.minReceive, 36);
+  assert.equal(remainder.amount, 60);
+  assert.equal(remainder.minReceive, 54);
+  assert.equal(state.directions[0].available, available - 36.8);
+  assert.equal(state.collateral.reservedUSDT, 40);
+  assert.equal(providerMetrics(state).pendingIncomeUSDT, 2);
+  const before = JSON.stringify(state);
+  assert.throws(() => acceptQuote(state, order.id, quote.id, 2100), /зарезервирована/);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test('partial provider capacity filters a feasible portion and acceptance only reserves that portion', () => {
+  const state = partialState();
+  const direction = partialDirection(state, { min: 20, max: 45, available: 30 });
+  const order = createOrder(state, partialInput());
+  assert.equal(isDirectionCompatible(direction, order), true);
+  assert.equal(isDirectionCompatible(direction, { ...order, partial: false }), false);
+  assert.equal(isDirectionCompatible({ ...direction, min: 31 }, order), false);
+  assert.equal(isDirectionCompatible({ ...direction, available: 0 }, order), false);
+  const quote = submitQuote(state, order.id, { giveAmount: 33.33, amount: 30 }, 1000);
+  acceptQuote(state, order.id, quote.id, 2000);
+  assert.equal(direction.available, 0);
+  assert.equal(order.amount, 33.33);
+  assert.equal(order.minReceive, 30);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.equal(remainder.amount, 66.67);
+  assert.equal(remainder.minReceive, 60);
+});
+
+test('quote splitting rounds the executed minimum upward and conserves both original sums across repeated fills', () => {
+  const state = partialState();
+  partialDirection(state);
+  const order = createOrder(state, { ...partialInput(), minReceive: 92 });
+  const first = submitQuote(state, order.id, { giveAmount: 33.33, amount: 30.67 }, 1000);
+  assert.throws(() => submitQuote(state, order.id, { giveAmount: 33.33, amount: 30.66 }, 1000), /минимальной/);
+  acceptQuote(state, order.id, first.id, 2000);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  const second = submitQuote(state, remainder.id, { giveAmount: 33.33, amount: 31 }, 3000);
+  acceptQuote(state, remainder.id, second.id, 4000);
+  const final = state.orders.find(item => item.id === remainder.remainderOrderId);
+  assert.equal(final.rootOrderId, order.id);
+  assert.equal(final.parentOrderId, remainder.id);
+  assert.equal(Number(state.orders.reduce((sum, item) => sum + item.amount, 0).toFixed(2)), 100);
+  assert.equal(Number(state.orders.reduce((sum, item) => sum + item.minReceive, 0).toFixed(2)), 92);
+  assert.equal(state.orders.filter(item => item.status === 'searching').length, 1);
+});
+
+test('invalid partial amounts reject atomically and do not replace an earlier pending quote', () => {
+  for (const partial of [false, true]) {
+    const state = partialState();
+    partialDirection(state);
+    const order = createOrder(state, partialInput(partial));
+    const first = submitQuote(state, order.id, { amount: 92 }, 1000);
+    for (const giveAmount of [0, -1, 101, Infinity, NaN, '', null, false, ...(partial ? [] : [40])]) {
+      const before = JSON.stringify(state);
+      assert.throws(() => submitQuote(state, order.id, { giveAmount, amount: 92 }, 1100));
+      assert.equal(JSON.stringify(state), before);
+      assert.equal(first.status, 'pending');
+    }
+  }
+  const state = partialState();
+  partialDirection(state);
+  const tinyMinimum = createOrder(state, { ...partialInput(), minReceive: 0.01 });
+  const before = JSON.stringify(state);
+  assert.throws(() => submitQuote(state, tinyMinimum.id, { giveAmount: 99.99, amount: 1 }), /остаток/);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test('a partial quote revalidates client permission and the exact reserved volume before accepting', () => {
+  const state = partialState();
+  partialDirection(state);
+  const order = createOrder(state, partialInput());
+  const quote = submitQuote(state, order.id, { giveAmount: 40, amount: 36 }, 1000);
+  order.partial = false;
+  let before = JSON.stringify(state);
+  assert.throws(() => acceptQuote(state, order.id, quote.id, 2000), /всей суммы/);
+  assert.equal(JSON.stringify(state), before);
+  order.partial = true;
+  state.directions[0].available = 35;
+  before = JSON.stringify(state);
+  assert.throws(() => acceptQuote(state, order.id, quote.id, 2000), /Объём провайдера/);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test('provider quote leftovers can immediately match a peer while the accepted deal stays isolated', () => {
+  const state = partialState();
+  partialDirection(state);
+  const order = createOrder(state, partialInput());
+  const quote = submitQuote(state, order.id, { giveAmount: 40, amount: 36 }, 1000);
+  state.orders.push(partialPeer(54, 60));
+  acceptQuote(state, order.id, quote.id, 2000);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.equal(order.status, 'agreed');
+  assert.equal(order.matchedOrderId, undefined);
+  assert.equal(remainder.status, 'matched');
+  assert.equal(remainder.matchedOrderId, 'partial-peer');
+  assert.equal(remainder.acceptedQuoteId, undefined);
+  assert.equal(remainder.collateralReservedUSDT, undefined);
+  assert.deepEqual(remainder.quotes, []);
+  assert.equal(createOrder(state, { ...partialInput(false), amount: 60, minReceive: 54 }).status, 'searching');
+});
+
+test('a provider problem stops remaining confirmations without releasing collateral or counting income', () => {
+  const state = partialState();
+  partialDirection(state);
+  const order = createOrder(state, partialInput());
+  const quote = submitQuote(state, order.id, { amount: 92, incomeUSDT: 3 }, 1000);
+  acceptQuote(state, order.id, quote.id, 2000);
+  confirmSettlement(state, order.id, 'provider', 3000);
+  const metrics = providerMetrics(state);
+  assert.equal(reportProblem(state, order.id, { reason: 'not-received', comment: 'Средства пока не поступили.' }, 4000), order);
+  assert.equal(order.problem.type, 'not-received');
+  assert.equal(order.problem.status, 'open');
+  assert.equal(order.problem.createdAt, 4000);
+  assert.equal(order.status, 'agreed');
+  assert.match(state.notifications[0].message, /не отправлялось/);
+  const before = JSON.stringify(state);
+  assert.throws(() => confirmSettlement(state, order.id, 'client', 5000), /открыта проблема/);
+  assert.throws(() => reportProblem(state, order.id, { reason: 'other', comment: 'Повторное обращение.' }), /уже зафиксирована/);
+  assert.equal(JSON.stringify(state), before);
+  assert.deepEqual(providerMetrics(state), metrics);
+  assert.equal(providerMetrics(state).earnedUSDT, 0);
+});
+
+test('a direct peer problem blocks settlement and duplicate problem reports from both sides', () => {
+  const state = partialState();
+  const peer = partialPeer();
+  state.orders.push(peer);
+  const order = createOrder(state, partialInput());
+  acceptMatch(state, order.id);
+  reportProblem(state, peer.id, { reason: 'wrong-amount', comment: 'Полученная сумма отличается.' }, 1000);
+  assert.equal(state.notifications[0].orderId, order.id);
+  for (const item of [peer, order]) {
+    const before = JSON.stringify(state);
+    assert.throws(() => confirmSettlement(state, item.id, 'client'), /открыта проблема/);
+    assert.throws(() => reportProblem(state, item.id, { reason: 'other', comment: 'Повторное описание проблемы.' }), /уже зафиксирована/);
+    assert.equal(JSON.stringify(state), before);
+  }
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.equal(remainder.problem, undefined);
+  assert.equal(remainder.status, 'searching');
+});
+
+test('problem reasons, comment length and deal lifecycle are validated without mutations', () => {
+  const state = partialState();
+  partialDirection(state);
+  const order = createOrder(state, partialInput());
+  const valid = { reason: 'other', comment: 'Описание проблемы со сделкой.' };
+  assert.throws(() => reportProblem(state, order.id, valid), /согласованной/);
+  const quote = submitQuote(state, order.id, 92, 1000);
+  acceptQuote(state, order.id, quote.id, 2000);
+  for (const invalid of [{ ...valid, reason: 'refund' }, { ...valid, comment: 'коротко' }, { ...valid, comment: 'x'.repeat(1001) }, { ...valid, comment: null }]) {
+    const before = JSON.stringify(state);
+    assert.throws(() => reportProblem(state, order.id, invalid));
+    assert.equal(JSON.stringify(state), before);
+  }
+  confirmSettlement(state, order.id, 'client', 3000);
+  confirmSettlement(state, order.id, 'provider', 4000);
+  assert.throws(() => reportProblem(state, order.id, valid), /незавершённой/);
+});
+
+test('AED uses the demo dirham rate and supports cash and catalogued UAE bank endpoints', () => {
+  assert.equal(CURRENCIES.find(item => item.code === 'AED').rateUSD, 3.6725);
+  assert.equal(amountFor(100, 'USD', 'AED'), 367.25);
+  const bank = BANKS.find(item => item.currencies.includes('AED'));
+  assert.ok(bank);
+  const state = partialState();
+  const order = createOrder(state, { ...partialInput(), receive: { currency: 'AED', method: 'bank', bank: bank.id }, minReceive: 367.25 });
+  assert.equal(order.receive.bank, bank.id);
+  assert.equal(order.receive.country, 'AE');
+  assert.equal(createOrder(state, { ...partialInput(), receive: { currency: 'AED', method: 'cash', city: 'Дубай', address: 'Демо: Dubai Mall, вход 1' }, minReceive: 367.25 }).receive.currency, 'AED');
+});
+
+test('a one-micro-unit crypto shortfall cannot overdraw liquidity or collateral', () => {
+  const state = partialState();
+  const order = createOrder(state, {
+    give: { currency: 'USD', method: 'cash', city: 'Дубай', address: 'Демо: Dubai Mall, вход 1' },
+    receive: { currency: 'USDT', method: 'crypto', network: 'TRC20' },
+    amount: 100, minReceive: 100, partial: true,
+  });
+  const direction = addDirection(state, { give: order.receive, receive: order.give, min: 1, max: 1000, available: 49.999999 });
+  let before = JSON.stringify(state);
+  assert.throws(() => submitQuote(state, order.id, { giveAmount: 50, amount: 50 }, 1000), /остатком/);
+  assert.equal(JSON.stringify(state), before);
+  direction.available = 50;
+  const quote = submitQuote(state, order.id, { giveAmount: 50, amount: 50 }, 1000);
+  state.collateral.totalUSDT = 49.999999;
+  before = JSON.stringify(state);
+  assert.throws(() => acceptQuote(state, order.id, quote.id, 2000), /обеспечения/);
+  assert.equal(JSON.stringify(state), before);
 });

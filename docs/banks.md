@@ -1,0 +1,11 @@
+# Каталог банков Handshake
+
+Проверено 15 октября 2026 года. Это выбранные способы расчёта для прототипа, а не рейтинг банков по активам, подтверждение партнёрства или обещание доступности переводов конкретному клиенту. Валюты в каталоге — поддерживаемое продуктом подмножество банковских услуг.
+
+- Россия: Т-Банк, Альфа-Банк, Сбер, Яндекс Пэй, Райффайзен — набор пользователя, RUB.
+- Армения: Ameriabank, Ardshinbank, Evocabank, ACBA, IDBank — набор пользователя, AMD/USD/EUR. Добавленные валюты подтверждаются [тарифами Evocabank](https://www.evoca.am/en/tariffs-for-commissions/accounts-tariffs/current-accounts) и [переводами Ardshinbank](https://ardshinbank.am/for-you/AMD/artpox?lang=en).
+- Европа: только Revolut, EUR/USD. Wise оставлен с `legacy: true` для чтения старых записей и исключён из новых списков.
+- Грузия: TBC Bank, Bank of Georgia, Liberty Bank, Basisbank, Credo Bank. Все пять присутствуют в [реестре Национального банка Грузии](https://nbg.gov.ge/en/licensed-commercial-banks). Для добавленных банков GEL/USD/EUR подтверждаются [тарифами Liberty](https://libertybank.ge/en/produqtebi/chemtvis/angarishebi-da-baratebi/angarishis-tarifebi), [тарифами Basisbank](https://bb.ge/en/personal/service-rates/personal-rates), [текущими счетами Credo](https://credobank.ge/en/products/current-account). Нумерация и порядок в интерфейсе не означают рейтинг.
+- ОАЭ: Emirates NBD, First Abu Dhabi Bank, ADCB, Dubai Islamic Bank, Mashreq — пять выбранных розничных банков из [реестра CBUAE за август 2026 года](https://centralbank.ae/media/hw0lreyi/cb-register-august-2026.pdf), открытого через [страницу лицензирования CBUAE](https://centralbank.ae/en/licensing/). В прототипе все пять доступны в AED; Emirates NBD также в USD, согласно [официальному KFS](https://www.emiratesnbd.com/en/kfs/cash). Отсутствие других иностранных валют означает ограничение каталога, а не утверждение об отсутствии таких счетов у банка.
+
+`banksFor(currency, country?)` возвращает только доступные для нового выбора банки. `availableBankCountries(currency)` возвращает совместимые группы стран. `bankCountry(endpoint)` восстанавливает страну из ID банка, включая старые записи; поле `country` не меняет страну известного банка. Код `EU` обозначает группу «Европа» в интерфейсе.
