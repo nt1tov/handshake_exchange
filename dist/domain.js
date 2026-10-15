@@ -1,4 +1,5 @@
 import { BANKS } from './bank-catalog.js';
+import { migrateVault, vaultMetrics } from './vault.js';
 export { BANKS } from './bank-catalog.js';
 
 export const CURRENCIES = [
@@ -10,9 +11,10 @@ export const CURRENCIES = [
   { code: 'GEL', name: 'Грузинский лари', symbol: '₾', color: '#9165b1', rateUSD: 2.72 },
   { code: 'USDC', name: 'USD Coin', symbol: '$', color: '#2775ca', rateUSD: 1 },
   { code: 'AED', name: 'Дирхам ОАЭ', symbol: 'د.إ', color: '#438e7a', rateUSD: 3.6725 },
+  { code: 'KZT', name: 'Казахстанский тенге', symbol: '₸', color: '#398aa6', rateUSD: 500 },
 ];
 
-export const CITIES = ['Ереван', 'Москва', 'Тбилиси', 'Санкт-Петербург', 'Дубай'];
+export const CITIES = ['Ереван', 'Москва', 'Тбилиси', 'Санкт-Петербург', 'Дубай', 'Алматы', 'Астана'];
 export const NETWORKS = ['TRC20', 'ERC20', 'TON', 'Solana'];
 
 const cryptoCurrencies = new Set(['USDT', 'USDC']);
@@ -81,6 +83,15 @@ function sameCurrency(item) {
 
 function requireDifferentCurrencies(item) {
   if (sameCurrency(item)) throw new Error('Выберите разные валюты для отправки и получения.');
+}
+
+function invalidBankCurrency(item) {
+  return [item?.give, item?.receive].some(side => side?.method === 'bank'
+    && !BANKS.some(bank => bank.id === side.bank && bank.currencies.includes(side.currency)));
+}
+
+function requireSupportedBanks(item) {
+  if (invalidBankCurrency(item)) throw new Error('Банк больше не поддерживает валюту этой заявки. Создайте новую заявку.');
 }
 
 function endpoints(input) {
@@ -162,7 +173,7 @@ function executionFits(order, giveAmount, receiveAmount) {
 
 function matchExecution(order, candidate) {
   if (candidate.id === order.id || candidate.owner === order.owner || candidate.status !== 'searching'
-    || sameCurrency(candidate) || !sameEndpoint(order.give, candidate.receive) || !sameEndpoint(order.receive, candidate.give)) return null;
+    || sameCurrency(candidate) || invalidBankCurrency(candidate) || !sameEndpoint(order.give, candidate.receive) || !sameEndpoint(order.receive, candidate.give)) return null;
   let giveAmount = order.amount;
   let receiveAmount = candidate.amount;
   if (order.partial === true) giveAmount = Math.min(order.amount, candidate.minReceive);
@@ -180,7 +191,7 @@ function matchExecution(order, candidate) {
 }
 
 export function findMatch(state, order) {
-  if (order.status !== 'searching' || sameCurrency(order)) return null;
+  if (order.status !== 'searching' || sameCurrency(order) || invalidBankCurrency(order)) return null;
   return state.orders.map(candidate => ({ candidate, execution: matchExecution(order, candidate) }))
     .filter(item => item.execution)
     .sort((first, second) => second.execution.receiveAmount - first.execution.receiveAmount
@@ -246,7 +257,13 @@ export function createOrder(state, input, now = Date.now()) {
     id: makeId('HS', now), owner: 'me', ...sides, amount, minReceive,
     partial: input.partial === true, status: 'searching', createdAt: now, quotes: [],
   };
-  const match = findMatch(state, order);
+  let match;
+  if (input.matchTargetId !== undefined) {
+    match = state.orders.find(candidate => candidate.id === input.matchTargetId);
+    if (!match || !matchExecution(order, match)) throw new Error('Заявка по ссылке больше не подходит под выбранные условия.');
+  } else {
+    match = findMatch(state, order);
+  }
   if (match) reserveMatch(order, match);
   state.orders.unshift(order);
   notify(state, match ? 'match' : 'order', match ? 'Встречная заявка найдена' : 'Заявка опубликована', match ? 'Условия совпали. Подтвердите обмен в своей заявке.' : 'Ищем встречную заявку. Провайдеры наличных могут предложить свою цену.', order.id, now);
@@ -256,9 +273,11 @@ export function createOrder(state, input, now = Date.now()) {
 export function acceptMatch(state, orderId, now = Date.now()) {
   const order = getOrder(state, orderId);
   requireDifferentCurrencies(order);
+  requireSupportedBanks(order);
   if (order.status !== 'matched') throw new Error('У этой заявки нет активного совпадения.');
   const match = getOrder(state, order.matchedOrderId);
   requireDifferentCurrencies(match);
+  requireSupportedBanks(match);
   if (match.status !== 'matched' || match.matchedOrderId !== order.id
     || !sameEndpoint(order.give, match.receive) || !sameEndpoint(order.receive, match.give)) {
     throw new Error('Встречная заявка больше недоступна.');
@@ -284,6 +303,7 @@ export function acceptMatch(state, orderId, now = Date.now()) {
 
 function directionEndpointsFit(direction, order) {
   return Boolean(direction?.active && order.status === 'searching' && !sameCurrency(direction) && !sameCurrency(order)
+    && !invalidBankCurrency(direction) && !invalidBankCurrency(order)
     && sameEndpoint(direction.give, order.receive) && sameEndpoint(direction.receive, order.give));
 }
 
@@ -313,6 +333,7 @@ function canQuoteAmount(direction, order, amount) {
 export function submitQuote(state, orderId, input, now = Date.now()) {
   const order = getOrder(state, orderId);
   requireDifferentCurrencies(order);
+  requireSupportedBanks(order);
   requireSearching(order);
   if (order.give.method !== 'cash' && order.receive.method !== 'cash') throw new Error('Отклики провайдера доступны для заявок с наличными.');
   const values = input && typeof input === 'object' && !Array.isArray(input) ? input : { amount: input };
@@ -341,6 +362,7 @@ export function submitQuote(state, orderId, input, now = Date.now()) {
 export function acceptQuote(state, orderId, quoteId, now = Date.now()) {
   const order = getOrder(state, orderId);
   requireDifferentCurrencies(order);
+  requireSupportedBanks(order);
   requireSearching(order);
   const quote = order.quotes.find((item) => item.id === quoteId);
   if (!quote || quote.status !== 'pending') throw new Error('Предложение больше недоступно.');
@@ -348,10 +370,11 @@ export function acceptQuote(state, orderId, quoteId, now = Date.now()) {
   const split = executionFits(order, quote.giveAmount ?? order.amount, quote.amount);
   const direction = state.directions.find((item) => item.id === quote.directionId);
   requireDifferentCurrencies(direction);
+  requireSupportedBanks(direction);
   if (!canQuoteAmount(direction, order, quote.amount)) throw new Error('Объём провайдера больше недоступен. Запросите новое предложение.');
   const collateral = state.collateral ?? { totalUSDT: 10000, reservedUSDT: 0 };
   const requiredUSDT = amountFor(quote.amount, order.receive.currency, 'USDT');
-  if (requiredUSDT > collateral.totalUSDT - collateral.reservedUSDT + currencyStep('USDT') / 1000) throw new Error('Недостаточно свободного демо-обеспечения провайдера.');
+  if (requiredUSDT > vaultMetrics(state).availableUSDT + currencyStep('USDT') / 1000) throw new Error('Недостаточно свободного демо-обеспечения провайдера.');
   state.collateral = collateral;
   collateral.reservedUSDT = roundCurrency(collateral.reservedUSDT + requiredUSDT, 'USDT');
   direction.available = Number((direction.available - quote.amount).toFixed(6));
@@ -432,10 +455,12 @@ export function providerMetrics(state) {
   const income = (orders) => roundCurrency(orders.reduce((sum, order) => sum + (acceptedProviderQuote(order).incomeUSDT ?? 0), 0), 'USDT');
   const collateralTotalUSDT = state.collateral?.totalUSDT ?? 10000;
   const collateralReservedUSDT = state.collateral?.reservedUSDT ?? 0;
+  const vault = vaultMetrics(state);
   return {
     completedCount: completed.length, earnedUSDT: income(completed), pendingIncomeUSDT: income(active), activeCount: active.length,
     collateralTotalUSDT, collateralReservedUSDT,
-    collateralAvailableUSDT: Math.max(0, roundCurrency(collateralTotalUSDT - collateralReservedUSDT, 'USDT')),
+    collateralVaultLockedUSDT: vault.depositedUSDT,
+    collateralAvailableUSDT: vault.availableUSDT,
   };
 }
 
@@ -466,9 +491,9 @@ export function migrateState(state) {
   }
   const cancelledIds = new Set();
   for (const order of state.orders) {
-    if (!sameCurrency(order) || !['searching', 'matched'].includes(order.status)) continue;
+    if ((!sameCurrency(order) && !invalidBankCurrency(order)) || !['searching', 'matched'].includes(order.status)) continue;
     order.status = 'cancelled';
-    order.invalidReason = 'same-currency';
+    order.invalidReason = sameCurrency(order) ? 'same-currency' : 'unsupported-bank-currency';
     for (const quote of order.quotes) if (quote.status === 'pending') quote.status = 'declined';
     cancelledIds.add(order.id);
     delete order.matchedOrderId;
@@ -483,12 +508,13 @@ export function migrateState(state) {
     delete order.matchedReceive;
   }
   for (const direction of state.directions) {
-    if (!sameCurrency(direction)) continue;
+    if (!sameCurrency(direction) && !invalidBankCurrency(direction)) continue;
     direction.active = false;
-    direction.invalidReason = 'same-currency';
+    direction.invalidReason = sameCurrency(direction) ? 'same-currency' : 'unsupported-bank-currency';
   }
   const reservedUSDT = roundCurrency(state.orders.reduce((sum, order) => sum + (order.status === 'agreed' && acceptedProviderQuote(order) ? order.collateralReservedUSDT ?? 0 : 0), 0), 'USDT');
   state.collateral = { totalUSDT: state.collateral?.totalUSDT ?? 10000, reservedUSDT };
+  migrateVault(state);
   state.version = 2;
   return state;
 }
@@ -530,7 +556,10 @@ export function addDirection(state, input) {
 export function toggleDirection(state, id) {
   const direction = state.directions.find((item) => item.id === id);
   if (!direction) throw new Error('Направление не найдено.');
-  if (!direction.active) requireDifferentCurrencies(direction);
+  if (!direction.active) {
+    requireDifferentCurrencies(direction);
+    requireSupportedBanks(direction);
+  }
   direction.active = !direction.active;
   return direction;
 }
@@ -555,6 +584,7 @@ export function seedState() {
   return {
     version: 2,
     collateral: { totalUSDT: 10000, reservedUSDT: 0 },
+    vault: { version: 1, enabled: false, deposits: [] },
     orders: [
       order('HS-1042', 'me', rub, amd, 250000, 24),
       order('HS-1041', 'me', usdt, eur, 2500, 42),

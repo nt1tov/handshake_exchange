@@ -23,10 +23,21 @@ test('each country has five local-currency choices except the Europe MVP', () =>
 test('currency-specific country lists never offer empty groups or crypto banks', () => {
   assert.deepEqual(availableBankCountries('AED').map(country => country.code), ['AE']);
   assert.deepEqual(availableBankCountries('GEL').map(country => country.code), ['GE']);
-  assert.deepEqual(availableBankCountries('EUR').map(country => country.code), ['AM', 'EU', 'GE']);
+  assert.deepEqual(availableBankCountries('EUR').map(country => country.code), ['EU', 'GE']);
+  assert.deepEqual(availableBankCountries('KZT').map(country => country.code), ['KZ']);
   assert.deepEqual(availableBankCountries('USDT'), []);
   assert.deepEqual(banksFor('USD', 'RU'), []);
   assert.deepEqual(banksFor('RUB', 'UNKNOWN'), []);
+});
+
+test('bank currency sets match the product constraints and Kaspi Gold stays tenge-only', () => {
+  const sets = { RU: ['RUB'], AM: ['AMD', 'USD'], EU: ['EUR', 'USD'], GE: ['GEL', 'USD', 'EUR'], AE: ['AED', 'USD'], KZ: ['KZT', 'USD'] };
+  for (const bank of BANKS.filter(bank => !bank.legacy)) {
+    assert.deepEqual(bank.currencies, bank.id === 'kaspi' ? ['KZT'] : sets[bank.country], bank.id);
+  }
+  assert.deepEqual(banksFor('KZT', 'KZ').map(bank => bank.id), ['halyk', 'kaspi', 'bcc', 'forte', 'alatau']);
+  assert.deepEqual(banksFor('USD', 'KZ').map(bank => bank.id), ['halyk', 'bcc', 'forte', 'alatau']);
+  assert.equal(BANKS.find(bank => bank.id === 'alatau').name, 'Alatau City Bank');
 });
 
 test('bank identity wins over stale country fields, including legacy records', () => {

@@ -1,4 +1,4 @@
-import { translations } from './translations.js?v=20261015-flows';
+import { translations } from './translations.js?v=20261015-vault';
 
 export const LANGUAGES = [
   { code: 'ru', label: 'Русский', locale: 'ru-RU' },

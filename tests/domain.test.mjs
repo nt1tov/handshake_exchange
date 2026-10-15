@@ -828,3 +828,100 @@ test('a one-micro-unit crypto shortfall cannot overdraw liquidity or collateral'
   assert.throws(() => acceptQuote(state, order.id, quote.id, 2000), /обеспечения/);
   assert.equal(JSON.stringify(state), before);
 });
+
+test('targeted matching uses only the requested peer and rejects unavailable, incompatible and own targets atomically', () => {
+  const state = partialState();
+  const target = partialPeer(90, 100, false, 'link-target');
+  const better = partialPeer(95, 100, false, 'better-unrelated');
+  state.orders.push(target, better);
+  const matched = createOrder(state, { ...partialInput(false), matchTargetId: target.id });
+  assert.equal(matched.matchedOrderId, target.id);
+  assert.equal(better.status, 'searching');
+  for (const id of [target.id, 'missing']) {
+    const before = JSON.stringify(state);
+    assert.throws(() => createOrder(state, { ...partialInput(false), matchTargetId: id }), /Заявка по ссылке/);
+    assert.equal(JSON.stringify(state), before);
+  }
+  const incompatible = { ...partialPeer(90, 100, false, 'incompatible'), receive: { ...partialInput().give, bank: 'ameria' } };
+  const own = { ...partialPeer(90, 100, false, 'own'), owner: 'me' };
+  state.orders.push(incompatible, own);
+  for (const id of [incompatible.id, own.id, matched.id]) {
+    const before = JSON.stringify(state);
+    assert.throws(() => createOrder(state, { ...partialInput(false), matchTargetId: id }), /Заявка по ссылке/);
+    assert.equal(JSON.stringify(state), before);
+  }
+  assert.equal(better.status, 'searching');
+});
+
+test('retired bank-currency pairs cannot be newly created, matched, quoted, accepted or reactivated', () => {
+  const state = partialState();
+  const give = { currency: 'EUR', method: 'bank', bank: 'ameria' };
+  const receive = { currency: 'USD', method: 'cash', city: 'Дубай', address: 'Демо: Dubai Mall, вход 1' };
+  assert.throws(() => createOrder(state, { give, receive, amount: 100, minReceive: 100 }), /банк/);
+  const order = { id: 'retired', owner: 'me', give, receive, amount: 100, minReceive: 100, partial: false, status: 'searching', quotes: [{ id: 'retired-quote', directionId: 'retired-direction', amount: 100, status: 'pending', expiresAt: 10000 }] };
+  const peer = { id: 'retired-peer', owner: 'peer', give: receive, receive: give, amount: 100, minReceive: 100, partial: false, status: 'searching', quotes: [] };
+  const direction = { id: 'retired-direction', give: receive, receive: give, min: 1, max: 1000, available: 1000, active: true };
+  state.orders.push(order, peer);
+  state.directions.push(direction);
+  assert.equal(findMatch(state, order), null);
+  assert.equal(isDirectionCompatible(direction, order), false);
+  let before = JSON.stringify(state);
+  assert.throws(() => submitQuote(state, order.id, 100, 1000), /Банк больше не поддерживает/);
+  assert.throws(() => acceptQuote(state, order.id, 'retired-quote', 1000), /Банк больше не поддерживает/);
+  assert.equal(JSON.stringify(state), before);
+  order.status = peer.status = 'matched';
+  order.matchedOrderId = peer.id;
+  peer.matchedOrderId = order.id;
+  before = JSON.stringify(state);
+  assert.throws(() => acceptMatch(state, order.id), /Банк больше не поддерживает/);
+  assert.equal(JSON.stringify(state), before);
+  toggleDirection(state, direction.id);
+  assert.throws(() => toggleDirection(state, direction.id), /Банк больше не поддерживает/);
+});
+
+test('bank-currency migration cancels only open invalid orders, releases valid peers and preserves settled history', () => {
+  const state = partialState();
+  const give = { currency: 'EUR', method: 'bank', bank: 'ameria' };
+  const receive = { currency: 'USD', method: 'cash', city: 'Дубай', address: 'Демо: Dubai Mall, вход 1' };
+  const make = (id, status) => ({ id, owner: 'me', give: { ...give }, receive: { ...receive }, amount: 100, minReceive: 100, status, quotes: [] });
+  const searching = make('retired-searching', 'searching');
+  searching.quotes.push({ id: 'pending', amount: 100, status: 'pending' });
+  const matched = make('retired-matched', 'matched');
+  const peer = { ...make('valid-peer', 'matched'), owner: 'peer', give: receive, receive: { currency: 'EUR', method: 'bank', bank: 'revolut' }, matchedOrderId: matched.id, matchedGive: 100, matchedReceive: 100 };
+  matched.matchedOrderId = peer.id;
+  matched.matchedGive = matched.matchedReceive = 100;
+  const agreed = make('retired-agreed', 'agreed');
+  const completed = make('retired-completed', 'completed');
+  state.orders = [searching, matched, peer, agreed, completed];
+  state.directions = [{ id: 'retired-pool', give: receive, receive: give, active: true, min: 1, max: 1000, available: 1000 }];
+  migrateState(state);
+  assert.equal(searching.status, 'cancelled');
+  assert.equal(searching.quotes[0].status, 'declined');
+  assert.equal(matched.status, 'cancelled');
+  assert.equal(matched.invalidReason, 'unsupported-bank-currency');
+  assert.equal(peer.status, 'searching');
+  assert.equal(peer.matchedOrderId, undefined);
+  assert.equal(peer.matchedGive, undefined);
+  assert.equal(peer.matchedReceive, undefined);
+  assert.equal(agreed.status, 'agreed');
+  assert.equal(completed.status, 'completed');
+  assert.equal(agreed.give.currency, 'EUR');
+  assert.equal(agreed.give.bank, 'ameria');
+  assert.equal(state.directions[0].active, false);
+  assert.equal(state.directions[0].invalidReason, 'unsupported-bank-currency');
+  const once = JSON.stringify(state);
+  migrateState(state);
+  assert.equal(JSON.stringify(state), once);
+});
+
+test('KZT supports the demo rate, Kazakhstan banks and both requested cash cities', () => {
+  assert.equal(amountFor(100, 'USD', 'KZT'), 50000);
+  const bank = BANKS.find(item => item.country === 'KZ' && item.currencies.includes('KZT'));
+  assert.ok(bank);
+  const state = partialState();
+  const order = createOrder(state, { ...partialInput(), receive: { currency: 'KZT', method: 'bank', bank: bank.id }, minReceive: 50000 });
+  assert.equal(order.receive.country, 'KZ');
+  for (const city of ['Алматы', 'Астана']) {
+    assert.equal(createOrder(state, { ...partialInput(), receive: { currency: 'KZT', method: 'cash', city, address: 'Демо: центр города' }, minReceive: 50000 }).receive.city, city);
+  }
+});

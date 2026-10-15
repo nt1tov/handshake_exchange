@@ -9,7 +9,7 @@ const crypto = { method: 'crypto', currency: 'USDT', network: 'TRC20' };
 const agreedState = () => ({ orders: [{ id: 'order-1', status: 'agreed', give: { ...bank }, receive: { ...cash } }] });
 
 test('bank forms follow the bank location, not the currency', () => {
-  assert.equal(paymentFields({ method: 'bank', bank: 'ameria', currency: 'EUR' })[1].label, 'Номер счёта (демо)');
+  assert.equal(paymentFields({ method: 'bank', bank: 'ameria', currency: 'USD' })[1].label, 'Номер счёта (демо)');
   assert.equal(paymentFields({ method: 'bank', bank: 'bog', currency: 'USD' })[1].label, 'IBAN (демо)');
   assert.equal(paymentFields({ method: 'bank', bank: 'enbd', currency: 'AED' })[1].label, 'IBAN (демо)');
   assert.equal(paymentFields({ method: 'bank', bank: 'wise', currency: 'EUR' })[1].label, 'IBAN / номер счёта (демо)');

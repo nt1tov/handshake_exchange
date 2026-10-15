@@ -1,5 +1,7 @@
 import { BANKS, CITIES, CURRENCIES, NETWORKS } from './domain.js';
-import { formatNumber } from './i18n.js?v=20261015-flows';
+import { formatNumber } from './i18n.js?v=20261015-vault';
+import { buildRequestLink, parseRequestLink, requestFingerprint, PUBLIC_REQUEST_ROOT } from './share-links.js';
+import { createQRCode } from './qr-code.js';
 
 const copy = {
   ru: {
@@ -10,6 +12,8 @@ const copy = {
     meeting: 'МЕСТО ВСТРЕЧИ', giveAddress: 'Передача', receiveAddress: 'Получение',
     status: 'Статус', snapshot: 'Снимок', city: 'Город', partial: 'Можно частями',
     note: 'Условия на момент создания карточки. Актуальность уточняйте перед обменом.',
+    qrTitle: 'ОТКРЫТЬ ЗАЯВКУ', qrHint: 'Сканируйте QR-код, чтобы посмотреть условия.',
+    qrNote: 'Снимок заявки · доступность нужно уточнить',
     unavailable: 'Не указано', unknown: 'В работе',
     statuses: { searching: 'Открыта', matched: 'Открыта', agreed: 'В процессе', cancelled: 'Отменена', completed: 'Состоялась' },
   },
@@ -21,13 +25,15 @@ const copy = {
     meeting: 'MEETING POINT', giveAddress: 'Giving', receiveAddress: 'Receiving',
     status: 'Status', snapshot: 'Snapshot', city: 'City', partial: 'Partial fills allowed',
     note: 'Terms when this card was created. Confirm availability before exchanging.',
+    qrTitle: 'OPEN REQUEST', qrHint: 'Scan the QR code to view the terms.',
+    qrNote: 'Request snapshot · confirm availability',
     unavailable: 'Not specified', unknown: 'In progress',
     statuses: { searching: 'Open', matched: 'Open', agreed: 'In progress', cancelled: 'Cancelled', completed: 'Completed' },
   },
 };
 
-const englishCities = { 'Ереван': 'Yerevan', 'Москва': 'Moscow', 'Тбилиси': 'Tbilisi', 'Санкт-Петербург': 'Saint Petersburg', 'Дубай': 'Dubai' };
-const englishBanks = { tbank: 'T-Bank', sber: 'Sber', alfa: 'Alfa-Bank', raiffeisen: 'Raiffeisen', yandexpay: 'Yandex Pay' };
+const englishCities = { 'Ереван': 'Yerevan', 'Москва': 'Moscow', 'Тбилиси': 'Tbilisi', 'Санкт-Петербург': 'Saint Petersburg', 'Дубай': 'Dubai', 'Алматы': 'Almaty', 'Астана': 'Astana' };
+const englishBanks = { tbank: 'T-Bank', sber: 'Sber', alfa: 'Alfa-Bank', raiffeisen: 'Raiffeisen', yandexpay: 'Yandex Pay', bcc: 'Bank CenterCredit' };
 const clean = (value, maximum = 240) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maximum) : '';
 const positive = value => (typeof value === 'number' || typeof value === 'string') && Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
 
@@ -54,8 +60,20 @@ function cardEndpoint(endpoint, amount, language, includeAddress) {
   };
 }
 
+function cardRequestURL(order, requestUrl, includeAddress) {
+  if (requestUrl === undefined || requestUrl === '') return '';
+  if (typeof requestUrl !== 'string' || requestUrl.length > 2000) throw new Error('Некорректная ссылка для карточки заявки.');
+  const url = new URL(requestUrl);
+  const root = new URL(PUBLIC_REQUEST_ROOT);
+  const record = parseRequestLink(requestUrl);
+  const expected = parseRequestLink(buildRequestLink(order, { includeAddress }));
+  if (url.origin !== root.origin || url.pathname !== root.pathname || url.search || !record
+    || requestFingerprint(record) !== requestFingerprint(expected)) throw new Error('Ссылка не соответствует условиям и настройкам приватности карточки.');
+  return url.href;
+}
+
 // This object is the entire sharing boundary: only these selected fields are rendered.
-export function buildCardData(order, { language = 'ru', includeAddress = false, now = Date.now() } = {}) {
+export function buildCardData(order, { language = 'ru', includeAddress = false, now = Date.now(), requestUrl } = {}) {
   const lang = language === 'en' ? 'en' : 'ru';
   const text = copy[lang];
   const source = order && typeof order === 'object' ? order : {};
@@ -65,7 +83,7 @@ export function buildCardData(order, { language = 'ru', includeAddress = false, 
   const fixedAmount = positive(accepted?.amount) ?? matchedAmount;
   const give = cardEndpoint(source.give, positive(accepted?.giveAmount) ?? matchedGive ?? source.amount, lang, includeAddress === true);
   const receive = cardEndpoint(source.receive, fixedAmount ?? source.minReceive, lang, includeAddress === true);
-  const id = typeof source.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(source.id) ? source.id : 'HS';
+  const id = typeof source.id === 'string' && /^[\p{L}\p{N}_-]{1,80}$/u.test(source.id) && source.id === source.id.normalize('NFC') ? source.id : 'HS';
   const statusKey = Object.hasOwn(text.statuses, source.status) ? source.status : 'unknown';
   const status = text.statuses[statusKey] || text.unknown;
   const timestamp = Number.isFinite(now) && Number.isFinite(new Date(now).getTime()) ? now : Date.now();
@@ -76,6 +94,7 @@ export function buildCardData(order, { language = 'ru', includeAddress = false, 
     ...(receive.address ? [{ label: text.receiveAddress, city: receive.city, value: receive.address }] : []),
   ];
   const partial = source.partial === true;
+  const publicURL = cardRequestURL(source, requestUrl, includeAddress === true);
   const caption = [
     `Handshake · ${id}`,
     `${text.giveCaption}: ${give.amountText} ${give.currency} · ${give.methodLabel} · ${give.detail}`,
@@ -86,8 +105,9 @@ export function buildCardData(order, { language = 'ru', includeAddress = false, 
     ...(partial ? [text.partial] : []),
     `${text.snapshot}: ${snapshot}`,
     text.note,
+    ...(publicURL ? [publicURL] : []),
   ].join('\n');
-  return { language: lang, id, give, receive, minimum: fixedAmount === null, partial, statusKey, status, snapshot, cities, addresses, caption };
+  return { language: lang, id, give, receive, minimum: fixedAmount === null, partial, statusKey, status, snapshot, cities, addresses, caption, requestUrl: publicURL };
 }
 
 const palette = { background: '#16191f', panel: '#222730', receive: '#302b3b', border: '#39404b', purpleBorder: '#635176', ink: '#f4f5f1', muted: '#acb4c1', purple: '#c7b0ef', lime: '#ccf288' };
@@ -198,8 +218,20 @@ export async function createOrderCard(order, options = {}) {
   if (!context) throw new Error('Canvas is unavailable.');
   const addressRows = data.addresses.map(item => ({ label: `${item.label}${item.city ? ` · ${item.city}` : ''}`, lines: lines(context, item.value, 1028, 20) }));
   const addressHeight = addressRows.length ? 54 + addressRows.reduce((sum, item) => sum + 31 + item.lines.length * 29 + 14, 0) : 0;
+  let qrImage;
+  let qrSize = 0;
+  if (data.requestUrl) {
+    const qrDataURL = createQRCode(data.requestUrl);
+    const svg = decodeURIComponent(qrDataURL.slice(qrDataURL.indexOf(',') + 1));
+    const modules = Number(/viewBox="0 0 (\d+) \d+"/.exec(svg)[1]) / 4;
+    qrSize = modules * Math.max(2, Math.floor(280 / modules));
+    qrImage = new Image();
+    qrImage.src = qrDataURL;
+    await qrImage.decode();
+  }
+  const qrHeight = qrImage ? Math.max(320, qrSize + 56) : 0;
   canvas.width = 1200;
-  canvas.height = 760 + addressHeight;
+  canvas.height = 760 + addressHeight + qrHeight;
   context.textBaseline = 'alphabetic';
   context.fillStyle = palette.background;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -242,6 +274,21 @@ export async function createOrderCard(order, options = {}) {
       for (const line of row.lines) { write(context, line, 56, y, 20, palette.ink); y += 29; }
       y += 16;
     }
+  }
+
+  if (qrImage) {
+    const top = 600 + addressHeight;
+    const qrX = 1124 - qrSize;
+    const contentWidth = qrX - 120;
+    roundRect(context, 56, top, 1088, qrHeight - 20, 22, palette.panel, palette.border);
+    write(context, text.qrTitle, 84, top + 56, 18, palette.lime, 550, contentWidth);
+    write(context, text.qrHint, 84, top + 103, 25, palette.ink, 500, contentWidth);
+    const url = new URL(data.requestUrl);
+    write(context, `${url.host}${url.pathname}`, 84, top + 149, 19, palette.muted, 400, contentWidth);
+    write(context, data.id, 84, top + 187, 18, palette.ink, 500, contentWidth);
+    write(context, text.qrNote, 84, top + 238, 16, palette.muted, 400, contentWidth);
+    context.imageSmoothingEnabled = false;
+    context.drawImage(qrImage, qrX, Math.round(top + (qrHeight - 20 - qrSize) / 2), qrSize, qrSize);
   }
 
   const footerY = canvas.height - 130;

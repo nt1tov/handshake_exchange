@@ -1,13 +1,19 @@
 import { CURRENCIES, BANKS, CITIES, NETWORKS, seedState, migrateState, createOrder, acceptMatch, submitQuote, acceptQuote, cancelOrder, addDirection, toggleDirection, isDirectionCompatible, amountFor, confirmSettlement, providerMetrics, orderExecution, reportProblem } from './domain.js';
+import { buildRequestLink, parseRequestLink } from './share-links.js';
+import { createQRCode } from './qr-code.js';
+import { shareDialog, sharedRequestPage } from './sharing-ui.js';
+import { createSharedReply } from './shared-reply.js';
+import { setVaultEnabled, depositVault, requestVaultWithdrawal, confirmVaultWithdrawal } from './vault.js';
+import { vaultPage, vaultSummaryCard, vaultModal } from './vault-ui.js';
 import { createOrderCard } from './share-card.js';
 import { serviceContent } from './service-content.js';
 import { currencyPairArt } from './currency-art.js';
 import { homePage } from './home-page.js';
 import { availableCurrencies, updateEndpoint } from './endpoint-draft.js';
-import { COUNTRIES, banksFor, bankCountry } from './bank-catalog.js';
+import { COUNTRIES, bankCountry } from './bank-catalog.js';
 import { paymentFields, createDemoPaymentDetails, setPaymentDetails } from './payment-details.js';
 
-import { LANGUAGES, translate, localize, formatNumber, parseNumber, formatTime } from './i18n.js?v=20261015-flows';
+import { LANGUAGES, translate, localize, formatNumber, parseNumber, formatTime } from './i18n.js?v=20261015-vault';
 import { getPreferences, setPreferences, initializePreferences } from './preferences.js';
 
 initializePreferences();
@@ -18,6 +24,10 @@ const STORAGE_KEY = 'handshake-demo-v1';
 const $ = (selector) => document.querySelector(selector);
 const esc = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const paths = {
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
+  moon: '<path d="M20.5 13A9 9 0 0 1 11 3.5 9 9 0 1 0 20.5 13Z"/>',
+  monitor: '<rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-4 0h8"/>',
+  link: '<path d="m10 13 4-4m-6 6-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/>',
   home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
   exchange: '<path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4 4-4-4 4-4"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
@@ -78,7 +88,7 @@ function endpointEditor(end, side, scope='composer') {
   const draft=isComposer?composer:directionDraft;
   const bank = BANKS.find(b=>b.id===end.bank);
   const country = bankCountry(end);
-  const selectableBanks = banksFor(end.currency,country);
+  const selectableBanks = BANKS.filter(b=>!b.legacy&&b.country===country);
   if(bank?.legacy&&!selectableBanks.some(b=>b.id===bank.id))selectableBanks.push(bank);
   const selector = end.method==='bank'
     ? `<select class="context-select" aria-label="${side==='give'?'Банк отправления':'Банк получения'}" data-endpoint="${side}" data-field="bank" data-scope="${scope}"><optgroup label="Банки">${options(selectableBanks.filter(b=>b.kind==='bank'),end.bank,b=>b.id,b=>b.name)}</optgroup><optgroup label="Платёжные сервисы">${options(selectableBanks.filter(b=>b.kind==='fintech'),end.bank,b=>b.id,b=>b.name)}</optgroup></select>`
@@ -93,17 +103,25 @@ const statusTag = order => {const [key,label,name]=status(order);return `<span c
 const shortId = id => id.length>12?`HS-${id.slice(-6).toUpperCase()}`:id;
 function orderRow(order) { const execution=orderExecution(order); return `<button class="order-row" data-action="order" data-id="${esc(order.id)}"><span class="order-pair"><span class="paired-icons">${coin(order.give.currency)}${coin(order.receive.currency)}</span><span><span class="order-title">${money(execution.giveAmount,order.give.currency)} ${icon('arrow',12)} ${money(execution.receiveAmount,order.receive.currency)}</span><span class="order-subtitle">${esc(endpointText(order.give))} <span aria-hidden="true">→</span> ${esc(endpointText(order.receive))}</span></span></span><span class="order-right">${statusTag(order)}<span class="order-meta">${esc(shortId(order.id))}${order.partial?' · Частями':''}${order.problem?.status==='open'?' · Есть проблема':''}</span>${icon('chevron',14)}</span></button>`; }
 const empty = (title,text,action='',label='') => `<div class="empty-state">${icon('orders',28)}<h3>${esc(title)}</h3><p>${esc(text)}</p>${action?`<button class="outline-button" data-action="${action}">${esc(label)}</button>`:''}</div>`;
-function preferenceSelects() {
-  const preferences=getPreferences();
-  return `<div class="settings-grid"><label class="preference-select-wrap"><span class="field-label">Язык интерфейса</span><span class="preference-select-line">${icon('globe',14)}<select class="select-field" id="settings-language" aria-label="Язык интерфейса" data-preference="language">${options(LANGUAGES,preferences.language,item=>item.code,item=>item.label)}</select></span></label><label class="preference-select-wrap"><span class="field-label">Оформление</span><span class="preference-select-line">${icon('spark',14)}<select class="select-field" id="settings-theme" aria-label="Оформление" data-preference="theme">${options([{value:'light',label:'Светлая'},{value:'dark',label:'Тёмная'},{value:'auto',label:'Авто'}],preferences.theme,item=>item.value,item=>item.label)}</select></span></label></div>`;
+function preferenceChoices(kind) {
+  const en=language()==='en',preferences=getPreferences();
+  const choices=kind==='language'?LANGUAGES.map(item=>[item.code,item.label,'globe']):[['light',en?'Light':'Светлая','sun'],['dark',en?'Dark':'Тёмная','moon'],['auto',en?'System':'Авто','monitor']];
+  return `<div class="preference-choices" data-no-i18n>${choices.map(([value,label,name])=>`<button class="preference-choice ${preferences[kind]===value?'selected':''}" data-action="set-${kind}" data-value="${value}" aria-pressed="${preferences[kind]===value}">${icon(name,20)}<span>${label}</span>${preferences[kind]===value?icon('check',18):''}</button>`).join('')}${kind==='theme'?`<p class="inset-notice">${en?'System theme follows your device settings.':'Автоматическая тема следует настройке устройства.'}</p>`:''}</div>`;
+}
+const vaultHelpers=()=>({esc,icon,language:language(),fmt:value=>fmtAmount(value,'USDT')});
+const sharingHelpers=()=>({esc,icon,language:language(),formatAmount:fmtAmount});
+function sharedComposerNote() {
+  if(!composer.sharedRequest)return '';
+  const en=language()==='en';
+  return `<div class="shared-composer-note" data-no-i18n><strong>${en?'Reply to request':'Отклик на заявку'} ${esc(shortId(composer.sharedRequest.id))}</strong><p>${en?'The terms are reversed for you. This demo creates a local match; the sender will not be notified.':'Условия развёрнуты для вас. В демо создаётся локальное совпадение; отправитель не получит уведомление.'}</p><button class="text-button" data-action="clear-shared-reply">${en?'Create a regular request':'Создать обычную заявку'}</button></div>`;
 }
 function sidebar() {
   const provider=ui.mode==='provider';
-  const nav = [['home','home','Главная',''],...(provider ? [['feed','orders','Входящие заявки',state.orders.filter(o=>state.directions.some(d=>isDirectionCompatible(d,o))).length],['directions','wallet','Моя ликвидность',''],['responses','orders','Мои предложения',''],['statistics','grid','Сделки и доход','']] : [['exchange','exchange','Обмен',''],['orders','orders','Мои заявки',activeOrders().length],['history','history','История','']])];
+  const nav = [['home','home','Главная',''],...(provider ? [['feed','orders','Входящие заявки',state.orders.filter(o=>state.directions.some(d=>isDirectionCompatible(d,o))).length],['directions','wallet','Моя ликвидность',''],['vault','lock','Доходный vault',''],['responses','orders','Мои предложения',''],['statistics','grid','Сделки и доход','']] : [['exchange','exchange','Обмен',''],['orders','orders','Мои заявки',activeOrders().length],['history','history','История','']])];
   return `<div class="mobile-scrim ${ui.mobile?'visible':''}" data-action="menu"></div><aside class="sidebar ${ui.mobile?'mobile-open':''}"><a class="brand" href="#" data-action="home" aria-label="Handshake — главная"><img src="./favicon.svg" alt="">handshake<span class="brand-period">.</span></a><div class="sidebar-caption">${provider?'Рабочее пространство':'Личный кабинет'}</div><nav class="nav-list" aria-label="Основная навигация">${nav.map(([page,name,label,count])=>`<button class="nav-item ${ui.page===page?'active':''}" data-action="navigate" data-page="${page}" ${ui.page===page?'aria-current="page"':''}>${icon(name,18)}${label}${count?`<span class="count">${count}</span>`:''}</button>`).join('')}</nav><div class="sidebar-bottom"><button class="provider-switch" data-action="mode">${icon(provider?'exchange':'briefcase',19)}<span>${provider?'Режим клиента':'Кабинет провайдера'}<small>${provider?'Вернуться к обмену':'Предлагайте свои условия'}</small></span>${icon('chevron',13)}</button><div class="side-bottom-links"><button class="text-button" data-action="help">${icon('help',15)}Поддержка</button><span>·</span><button class="text-button" data-action="about">О проекте</button></div><div class="side-footer"><span>© Handshake, 2026</span></div></div></aside>`;
 }
-const pageTitles = {home:'Главная',exchange:'Обмен',orders:'Мои заявки',history:'История',feed:'Входящие заявки',directions:'Моя ликвидность',responses:'Мои предложения',statistics:'Сделки и доход'};
-function header() { return `<header class="topbar"><button class="icon-button mobile-menu" data-action="menu" aria-label="Открыть меню">${icon('menu')}</button><div class="breadcrumb"><span>${ui.page==='home'?'Handshake':ui.mode==='provider'?'Кабинет провайдера':'Личный кабинет'}</span>${icon('chevron',10)}<strong>${pageTitles[ui.page]}</strong>${ui.mode==='provider'?'<span class="mode-label">Демо-роль</span>':''}</div><div class="top-actions"><button class="appearance-button" data-action="preferences" aria-label="Изменить язык и тему" title="Язык и оформление">${icon('globe',15)}<span>${language().toUpperCase()}</span></button><button class="location-button" data-action="location">${icon('pin',14)}${ui.location}${icon('down',11)}</button><span class="separator"></span><button class="icon-button" data-action="notifications" aria-label="Уведомления">${icon('bell',19)}${state.notifications.some(n=>!n.read&&(!n.orderId||state.orders.some(o=>o.id===n.orderId&&o.owner==='me')))?'<i class="notification-dot"></i>':''}</button><button class="profile-button" data-action="profile"><span class="avatar">НТ</span><span>Мой профиль</span>${icon('down',12)}</button></div></header>`; }
+const pageTitles = {home:'Главная',exchange:'Обмен',orders:'Мои заявки',history:'История',feed:'Входящие заявки',directions:'Моя ликвидность',responses:'Мои предложения',statistics:'Сделки и доход',vault:'Доходный vault',shared:'Заявка по ссылке'};
+function header() { return `<header class="topbar"><button class="icon-button mobile-menu" data-action="menu" aria-label="Открыть меню">${icon('menu')}</button><div class="breadcrumb"><span>${ui.page==='home'?'Handshake':ui.mode==='provider'?'Кабинет провайдера':'Личный кабинет'}</span>${icon('chevron',10)}<strong>${pageTitles[ui.page]}</strong>${ui.mode==='provider'?'<span class="mode-label">Демо-роль</span>':''}</div><div class="top-actions"><button class="appearance-button header-preference" data-action="language" aria-label="Язык интерфейса" title="Язык интерфейса">${icon('globe',20)}</button><button class="appearance-button header-preference" data-action="theme" aria-label="Оформление" title="Оформление">${icon({light:'sun',dark:'moon',auto:'monitor'}[getPreferences().theme],20)}</button><button class="location-button" data-action="location">${icon('pin',14)}${ui.location}${icon('down',11)}</button><span class="separator"></span><button class="icon-button" data-action="notifications" aria-label="Уведомления">${icon('bell',19)}${state.notifications.some(n=>!n.read&&(!n.orderId||state.orders.some(o=>o.id===n.orderId&&o.owner==='me')))?'<i class="notification-dot"></i>':''}</button><button class="profile-button" data-action="profile"><span class="avatar">НТ</span><span>Мой профиль</span>${icon('down',12)}</button></div></header>`; }
 const demoTag = '<span class="demo-tag"><i></i>Демо-режим</span>';
 function intro(title,subtitle,eyebrow='ОБМЕН ПО ВАШИМ ПРАВИЛАМ',action='') {return `<div class="intro"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div>${action||demoTag}</div>`;}
 function fillModeControl() {
@@ -149,7 +167,7 @@ function problemModal(order) {
 }
 
 function exchangePage() {
-  return `${intro('Найдите прямой обмен','Задайте сумму, валюты и удобный способ расчёта.')}<div class="exchange-layout"><section class="card exchange-card" aria-label="Конструктор обмена"><div class="card-top"><h2>Новый обмен</h2><span class="card-label"><i class="online-dot"></i>Клиенты + провайдеры</span></div><form id="exchange-form">${endpointEditor(composer.give,'give')}<div class="swap-row"><button class="swap-button" type="button" data-action="swap" aria-label="Поменять направление обмена">${icon('exchange',16)}</button></div>${endpointEditor(composer.receive,'receive')}<div class="rate-row"><span>${icon('info',12)}<span id="reference-rate">1 ${composer.give.currency} ≈ ${fmt(amountFor(1,composer.give.currency,composer.receive.currency))} ${composer.receive.currency}</span></span><span>Демонстрационный курс</span></div>${fillModeControl()}<button class="primary-button full" type="submit"><span>Найти обмен</span>${icon('arrow',17)}</button><div class="form-note">${icon('lock',11)}Реквизиты не нужны для создания заявки</div><div id="composer-error"></div></form></section><aside class="guide-column"><div class="guide-card"><h2>Ваша заявка.<br>Идеальное совпадение.</h2><p>Без поиска по чатам и бесконечного сравнения обменников.</p>${currencyPairArt(composer.give.currency,composer.receive.currency)}<ol class="steps"><li><span class="step-num">1</span><div><strong>Задайте условия</strong><p>Что, сколько и как хотите обменять.</p></div></li><li><span class="step-num">2</span><div><strong>Мы найдём совпадение</strong><p>Встречные заявки подбираются автоматически.</p></div></li><li><span class="step-num">3</span><div><strong>Подтвердите обмен</strong><p>Для наличных также предложат свою цену.</p></div></li></ol></div><div class="trust-card"><span class="trust-icon">${icon('shield',20)}</span><div><strong>Ваши данные — под контролем</strong><p>Проверка зависит от условий сделки</p></div><button class="icon-button" data-action="kyc" aria-label="О проверке личности">${icon('chevron',14)}</button></div></aside></div><div class="section-head"><h2>Мои заявки <span class="count-inline">${activeOrders().length}</span></h2><button class="text-button" data-action="navigate" data-page="orders">Все заявки ${icon('arrow',13)}</button></div><div class="order-list">${activeOrders().slice(0,3).map(orderRow).join('')||empty('Пока нет активных заявок','Создайте первый обмен в форме выше.')}</div>`;
+  return `${intro('Найдите прямой обмен','Задайте сумму, валюты и удобный способ расчёта.')}<div class="exchange-layout"><section class="card exchange-card" aria-label="Конструктор обмена"><div class="card-top"><h2>Новый обмен</h2><span class="card-label"><i class="online-dot"></i>Клиенты + провайдеры</span></div>${sharedComposerNote()}<form id="exchange-form">${endpointEditor(composer.give,'give')}<div class="swap-row"><button class="swap-button" type="button" data-action="swap" aria-label="Поменять направление обмена">${icon('exchange',16)}</button></div>${endpointEditor(composer.receive,'receive')}<div class="rate-row"><span>${icon('info',12)}<span id="reference-rate">1 ${composer.give.currency} ≈ ${fmt(amountFor(1,composer.give.currency,composer.receive.currency))} ${composer.receive.currency}</span></span><span>Демонстрационный курс</span></div>${fillModeControl()}<button class="primary-button full" type="submit"><span>Найти обмен</span>${icon('arrow',17)}</button><div class="form-note">${icon('lock',11)}Реквизиты не нужны для создания заявки</div><div id="composer-error"></div></form></section><aside class="guide-column"><div class="guide-card"><h2>Ваша заявка.<br>Идеальное совпадение.</h2><p>Без поиска по чатам и бесконечного сравнения обменников.</p>${currencyPairArt(composer.give.currency,composer.receive.currency)}<ol class="steps"><li><span class="step-num">1</span><div><strong>Задайте условия</strong><p>Что, сколько и как хотите обменять.</p></div></li><li><span class="step-num">2</span><div><strong>Мы найдём совпадение</strong><p>Встречные заявки подбираются автоматически.</p></div></li><li><span class="step-num">3</span><div><strong>Подтвердите обмен</strong><p>Для наличных также предложат свою цену.</p></div></li></ol></div><div class="trust-card"><span class="trust-icon">${icon('shield',20)}</span><div><strong>Ваши данные — под контролем</strong><p>Проверка зависит от условий сделки</p></div><button class="icon-button" data-action="kyc" aria-label="О проверке личности">${icon('chevron',14)}</button></div></aside></div><div class="section-head"><h2>Мои заявки <span class="count-inline">${activeOrders().length}</span></h2><button class="text-button" data-action="navigate" data-page="orders">Все заявки ${icon('arrow',13)}</button></div><div class="order-list">${activeOrders().slice(0,3).map(orderRow).join('')||empty('Пока нет активных заявок','Создайте первый обмен в форме выше.')}</div>`;
 }
 function ordersPage(history=false) {
   let orders=history?ownOrders():activeOrders();
@@ -175,7 +193,7 @@ function feedPage() {
   return `${intro('Хороший обмен начинается здесь.','Подходящие заявки уже у вас. Предложите клиенту свои условия.','КАБИНЕТ ПРОВАЙДЕРА')}<div class="stats-strip"><div class="card stat-card"><p>Подходящих заявок</p><strong>${state.orders.filter(o=>state.directions.some(d=>isDirectionCompatible(d,o))).length}</strong><small>По активным направлениям</small></div><div class="card stat-card"><p>Активных направлений</p><strong>${active.toString().padStart(2,'0')}</strong><small>Наличные, банки и крипта</small></div><div class="card stat-card"><p>Предложений в ожидании</p><strong>${quotes.toString().padStart(2,'0')}</strong><small>Цена действует 5 минут</small></div></div><div class="card filters"><div class="filter-field"><label for="filter-currency">Валюта заявки</label><select class="select-field" id="filter-currency" data-filter="filterCurrency"><option value="all">Все валюты</option>${options(CURRENCIES,ui.filterCurrency,c=>c.code,c=>c.code)}</select></div><div class="filter-field"><label for="filter-city">Город наличных</label><select class="select-field" id="filter-city" data-filter="filterCity"><option value="all">Все города</option>${options(CITIES,ui.filterCity)}</select></div><div class="filter-field"><label for="filter-min">Клиент отдаёт, от</label><input class="input-field" id="filter-min" inputmode="decimal" placeholder="Любая сумма" data-filter="filterMin" value="${esc(ui.filterMin)}"></div><div class="filter-field"><label for="filter-max">До</label><input class="input-field" id="filter-max" inputmode="decimal" placeholder="Без лимита" data-filter="filterMax" value="${esc(ui.filterMax)}"></div><label class="filter-toggle"><input type="checkbox" data-filter="onlyCompatible" ${ui.onlyCompatible?'checked':''}>Мои направления</label></div><div class="provider-summary">${icon('info',13)}Суммы фильтра — в отдаваемой клиентом валюте. Имя провайдера скрыто до оформления.</div><div class="section-head"><h2>Входящие заявки <span class="count-inline">${orders.length}</span></h2><button class="text-button" data-action="reset-filters">Сбросить фильтры</button></div><div class="feed-grid">${orders.map(requestCard).join('')}</div>${orders.length?'':empty('Подходящих заявок пока нет','Измените фильтры или добавьте новое направление, чтобы получать больше заявок.','add-direction','Добавить направление')}`;
 }
 function directionsPage() {
-  return `${intro('Каждому направлению — свои условия.','Укажите, что готовы отдать, что принять и в каком объёме.','МОЯ ЛИКВИДНОСТЬ',`<button class="primary-button" data-action="add-direction">${icon('plus',15)}Добавить</button>`)}<div class="info-box"><strong>Вы управляете предложением. Мы подбираем заявки.</strong>Активные направления определяют входящие запросы. Цена устанавливается в отклике на конкретную заявку; остаток уменьшается после принятия предложения.</div><div class="section-head"><h2>Пулы ликвидности <span class="count-inline">${state.directions.length}</span></h2></div><div class="pool-grid">${state.directions.map((d,index)=>`<article class="card pool-card ${d.active?'':'is-paused'}" aria-label="${esc(t('Пул'))} ${index+1}: ${d.give.currency} → ${d.receive.currency}"><div class="pool-header"><span class="pool-number">Пул · ${String(index+1).padStart(2,'0')}</span><span class="pool-status ${d.active?'is-active':''}"><i></i>${d.active?'Активен':'На паузе'}</span><button class="switch ${d.active?'on':''}" role="switch" aria-checked="${d.active}" aria-label="${d.active?'Приостановить':'Включить'} направление ${d.give.currency} → ${d.receive.currency} · Пул ${index+1}" data-action="toggle-direction" data-id="${esc(d.id)}" ${d.invalidReason==='same-currency'?'disabled':''}></button></div>${currencyPairArt(d.give.currency,d.receive.currency,{compact:true})}<div class="pool-endpoints"><p>${icon(d.give.method,13)}<span>${esc(endpointText(d.give))}</span></p><p>${icon(d.receive.method,13)}<span>${esc(endpointText(d.receive))}</span></p></div>${cashLocations(d)}${d.invalidReason==='same-currency'?'<p class="pool-invalid-note">Выберите разные валюты: создайте новый пул с другим активом.</p>':''}<div class="pool-balance"><span>Доступно в пуле</span><strong>${fmtAmount(d.available,d.give.currency)} <small>${d.give.currency}</small></strong></div><div class="pool-limits"><span>Лимит одной сделки</span><strong>${fmtAmount(d.min,d.give.currency)} – ${fmtAmount(d.max,d.give.currency)} ${d.give.currency}</strong></div></article>`).join('')}</div><p class="inset-notice">В демо остатки заданы отдельно для каждого направления. Это не банковские балансы и не подтверждённые резервы.</p>`;
+  return `${intro('Каждому направлению — свои условия.','Укажите, что готовы отдать, что принять и в каком объёме.','МОЯ ЛИКВИДНОСТЬ',`<button class="primary-button" data-action="add-direction">${icon('plus',15)}Добавить</button>`)}<div class="info-box"><strong>Вы управляете предложением. Мы подбираем заявки.</strong>Активные направления определяют входящие запросы. Цена устанавливается в отклике на конкретную заявку; остаток уменьшается после принятия предложения.</div>${vaultSummaryCard(state,vaultHelpers())}<div class="section-head"><h2>Пулы ликвидности <span class="count-inline">${state.directions.length}</span></h2></div><div class="pool-grid">${state.directions.map((d,index)=>`<article class="card pool-card ${d.active?'':'is-paused'}" aria-label="${esc(t('Пул'))} ${index+1}: ${d.give.currency} → ${d.receive.currency}"><div class="pool-header"><span class="pool-number">Пул · ${String(index+1).padStart(2,'0')}</span><span class="pool-status ${d.active?'is-active':''}"><i></i>${d.active?'Активен':'На паузе'}</span><button class="switch ${d.active?'on':''}" role="switch" aria-checked="${d.active}" aria-label="${d.active?'Приостановить':'Включить'} направление ${d.give.currency} → ${d.receive.currency} · Пул ${index+1}" data-action="toggle-direction" data-id="${esc(d.id)}" ${d.invalidReason==='same-currency'?'disabled':''}></button></div>${currencyPairArt(d.give.currency,d.receive.currency,{compact:true})}<div class="pool-endpoints"><p>${icon(d.give.method,13)}<span>${esc(endpointText(d.give))}</span></p><p>${icon(d.receive.method,13)}<span>${esc(endpointText(d.receive))}</span></p></div>${cashLocations(d)}${d.invalidReason==='same-currency'?'<p class="pool-invalid-note">Выберите разные валюты: создайте новый пул с другим активом.</p>':''}<div class="pool-balance"><span>Доступно в пуле</span><strong>${fmtAmount(d.available,d.give.currency)} <small>${d.give.currency}</small></strong></div><div class="pool-limits"><span>Лимит одной сделки</span><strong>${fmtAmount(d.min,d.give.currency)} – ${fmtAmount(d.max,d.give.currency)} ${d.give.currency}</strong></div></article>`).join('')}</div><p class="inset-notice">В демо остатки заданы отдельно для каждого направления. Это не банковские балансы и не подтверждённые резервы.</p>`;
 }
 function responsesPage() {
   const orders=state.orders.filter(o=>o.quotes.length);
@@ -190,7 +208,7 @@ function settlementPanel(order,actor) {
 function statisticsPage() {
   const m=providerMetrics(state);
   const deals=state.orders.filter(o=>o.acceptedQuoteId&&['agreed','completed'].includes(o.status)).sort((a,b)=>(b.completedAt||b.agreedAt)-(a.completedAt||a.agreedAt));
-  return `${intro('Сделки, которые приносят доход.','Завершённые обмены, заработок и обеспечение — в одном месте.','СДЕЛКИ И ДОХОД')}<div class="metrics-grid"><article class="card metric-card"><span>Завершено сделок</span><strong>${fmt(m.completedCount)}</strong><small>За всё время</small></article><article class="card metric-card metric-highlight"><span>Заработано</span><strong>${fmtAmount(m.earnedUSDT,'USDT')} <small>USDT</small></strong><small>По завершённым сделкам</small></article><article class="card metric-card"><span>Сделок в расчёте</span><strong>${fmt(m.activeCount)}</strong><small>Ожидают двух подтверждений</small></article><article class="card metric-card"><span>Ожидаемый доход</span><strong>${fmtAmount(m.pendingIncomeUSDT,'USDT')} <small>USDT</small></strong><small>После завершения расчётов</small></article></div><section class="card collateral-card"><div><span class="eyebrow">ОБЕСПЕЧЕНИЕ ПРОВАЙДЕРА</span><h2>${fmtAmount(m.collateralTotalUSDT,'USDT')} <span class="subtle">USDT</span></h2><p>Обеспечение ограничивает объём незавершённых сделок.</p><button class="text-button" data-action="terms">Как работает защита ${icon('arrow',13)}</button></div><div class="collateral-detail"><div><span>Заблокировано</span><strong>${fmtAmount(m.collateralReservedUSDT,'USDT')} USDT</strong></div><div class="collateral-bar" role="meter" aria-label="Заблокированное обеспечение" aria-valuemin="0" aria-valuemax="${m.collateralTotalUSDT}" aria-valuenow="${m.collateralReservedUSDT}"><i style="width:${Math.min(100,m.collateralReservedUSDT/Math.max(1,m.collateralTotalUSDT)*100)}%"></i></div><div><span>Доступно для новых сделок</span><strong>${fmtAmount(m.collateralAvailableUSDT,'USDT')} USDT</strong></div></div></section><p class="inset-notice">Доход указывает провайдер при отклике. Он уже включён в цену и не равен обороту. Обеспечение и расчёты в демо условные.</p><div class="section-head"><h2>История сделок <span class="count-inline">${deals.length}</span></h2><span class="card-label">За всё время</span></div><div class="deals-list">${deals.map(order=>{const quote=order.quotes.find(q=>q.id===order.acceptedQuoteId);return `<article class="card deal-card"><div class="request-heading"><span class="request-id">${esc(shortId(order.id))} · ${new Intl.DateTimeFormat(language(),{day:'numeric',month:'short'}).format(new Date(order.completedAt||order.agreedAt))}</span>${statusTag(order)}</div><div class="deal-main"><div><strong>${money(order.amount,order.give.currency)} → ${money(quote.amount,order.receive.currency)}</strong><p>${esc(endpointText(order.give))} → ${esc(endpointText(order.receive))}</p>${cashLocations(order)}</div><div class="deal-income"><small>${order.status==='completed'?'Заработано':'Ожидаемый доход'}</small><strong>+${fmtAmount(quote.incomeUSDT||0,'USDT')} USDT</strong></div></div>${order.status==='agreed'?settlementPanel(order,'provider'):''}</article>`;}).join('')||empty('Пока нет согласованных сделок','Принятые клиентами предложения появятся здесь.','open-feed','Перейти к заявкам')}</div>`;
+  return `${intro('Сделки, которые приносят доход.','Завершённые обмены, заработок и обеспечение — в одном месте.','СДЕЛКИ И ДОХОД')}<div class="metrics-grid"><article class="card metric-card"><span>Завершено сделок</span><strong>${fmt(m.completedCount)}</strong><small>За всё время</small></article><article class="card metric-card metric-highlight"><span>Заработано</span><strong>${fmtAmount(m.earnedUSDT,'USDT')} <small>USDT</small></strong><small>По завершённым сделкам</small></article><article class="card metric-card"><span>Сделок в расчёте</span><strong>${fmt(m.activeCount)}</strong><small>Ожидают двух подтверждений</small></article><article class="card metric-card"><span>Ожидаемый доход</span><strong>${fmtAmount(m.pendingIncomeUSDT,'USDT')} <small>USDT</small></strong><small>После завершения расчётов</small></article></div><section class="card collateral-card"><div><span class="eyebrow">ОБЕСПЕЧЕНИЕ ПРОВАЙДЕРА</span><h2>${fmtAmount(m.collateralTotalUSDT,'USDT')} <span class="subtle">USDT</span></h2><p>Обеспечение ограничивает объём незавершённых сделок.</p><button class="text-button" data-action="terms">Как работает защита ${icon('arrow',13)}</button></div><div class="collateral-detail"><div><span>Заблокировано</span><strong>${fmtAmount(m.collateralReservedUSDT,'USDT')} USDT</strong></div><div class="collateral-bar" role="meter" aria-label="Заблокированное обеспечение" aria-valuemin="0" aria-valuemax="${m.collateralTotalUSDT}" aria-valuenow="${m.collateralReservedUSDT}"><i style="width:${Math.min(100,m.collateralReservedUSDT/Math.max(1,m.collateralTotalUSDT)*100)}%"></i></div><div class="collateral-vault-note" data-no-i18n><span>${language()==='en'?'Locked in vault':'Заблокировано в vault'}</span><strong>${fmtAmount(m.collateralVaultLockedUSDT,'USDT')} USDT</strong></div><div><span>Доступно для новых сделок</span><strong>${fmtAmount(m.collateralAvailableUSDT,'USDT')} USDT</strong></div></div></section><p class="inset-notice">Доход указывает провайдер при отклике. Он уже включён в цену и не равен обороту. Обеспечение и расчёты в демо условные.</p><div class="section-head"><h2>История сделок <span class="count-inline">${deals.length}</span></h2><span class="card-label">За всё время</span></div><div class="deals-list">${deals.map(order=>{const quote=order.quotes.find(q=>q.id===order.acceptedQuoteId);return `<article class="card deal-card"><div class="request-heading"><span class="request-id">${esc(shortId(order.id))} · ${new Intl.DateTimeFormat(language(),{day:'numeric',month:'short'}).format(new Date(order.completedAt||order.agreedAt))}</span>${statusTag(order)}</div><div class="deal-main"><div><strong>${money(order.amount,order.give.currency)} → ${money(quote.amount,order.receive.currency)}</strong><p>${esc(endpointText(order.give))} → ${esc(endpointText(order.receive))}</p>${cashLocations(order)}</div><div class="deal-income"><small>${order.status==='completed'?'Заработано':'Ожидаемый доход'}</small><strong>+${fmtAmount(quote.incomeUSDT||0,'USDT')} USDT</strong></div></div>${order.status==='agreed'?settlementPanel(order,'provider'):''}</article>`;}).join('')||empty('Пока нет согласованных сделок','Принятые клиентами предложения появятся здесь.','open-feed','Перейти к заявкам')}</div>`;
 }
 const fmtRate=value=>Number.isFinite(value)?new Intl.NumberFormat(language(),{maximumFractionDigits:8,useGrouping:false}).format(value):'';
 function quoteModal(order) {
@@ -202,30 +220,36 @@ function quoteModal(order) {
 function quoteSummary(order) {return `<span>${t('Клиент получит')}</span><strong>${Number.isFinite(quoteDraft.amount)?money(quoteDraft.amount,order.receive.currency):'—'}</strong><small>${t('Клиент отдаст')}: ${Number.isFinite(quoteDraft.giveAmount)?money(quoteDraft.giveAmount,order.give.currency):'—'} · 1 ${order.give.currency} = ${fmtRate(quoteDraft.rate)||'—'} ${order.receive.currency}</small>`;}
 function updateQuoteSummary(order) {const el=$('#quote-calculation');if(el)el.innerHTML=quoteSummary(order);}
 function shareModal(order) {
-  const hasAddress=[order.give,order.receive].some(end=>end.method==='cash'&&end.address);
-  return modalShell('Карточка для чата','Заявка хранится в вашем браузере. Отправьте изображение в любой чат.',`<div class="share-preview">${shareDraft.card?`<img class="share-preview-image" src="${shareDraft.card.dataUrl}" alt="${esc(t('Карточка заявки на обмен'))}">`:`<p class="share-loading" role="status">Готовим карточку…</p>`}</div>${hasAddress?`<label class="share-address-toggle"><input type="checkbox" id="share-address" ${shareDraft.includeAddress?'checked':''}><span>Добавить район или ориентир на карточку</span></label>`:''}<p class="inset-notice">Без имени, реквизитов и KYC-данных. Карточка фиксирует условия на момент создания.</p><div class="share-actions"><button class="primary-button" data-action="native-share" ${!shareDraft.card?'disabled':''}>Поделиться PNG ${icon('arrow',15)}</button>${shareDraft.card?`<a class="outline-button" href="${shareDraft.card.dataUrl}" download="${esc(shareDraft.card.filename)}">Скачать PNG</a>`:'<button class="outline-button" disabled>Скачать PNG</button>'}</div>${shareDraft.card?`<label class="field-label" for="share-caption">Текст к карточке</label><textarea id="share-caption" class="share-caption" readonly data-no-i18n>${esc(shareDraft.card.caption)}</textarea><button class="text-button" data-action="copy-caption">Скопировать текст</button>`:''}`,true);
+  shareDraft.url=buildRequestLink(order,{includeAddress:shareDraft.includeAddress});
+  shareDraft.qr=createQRCode(shareDraft.url);
+  shareDraft.hasAddress=[order.give,order.receive].some(end=>end.method==='cash'&&end.address);
+  const view=shareDialog(parseRequestLink(shareDraft.url),shareDraft,sharingHelpers());
+  return modalShell(view.title,view.subtitle,view.body,true);
 }
 async function refreshShareCard() {
-  const generation=++shareGeneration;
-  const id=ui.modal?.id;
+  const generation=++shareGeneration,id=ui.modal?.id;
   if(ui.modal?.type!=='share')return;
-  try {const card=await createOrderCard(state.orders.find(o=>o.id===id),{language:language(),includeAddress:shareDraft.includeAddress});if(generation!==shareGeneration||ui.modal?.type!=='share'||ui.modal.id!==id)return;shareDraft.card=card;renderModal();}
-  catch(error){if(generation===shareGeneration&&ui.modal?.type==='share'){const target=$('.share-loading');if(target)target.textContent=t('Не удалось создать карточку. Откройте её ещё раз.');modalError(error);}}
+  try {const card=await createOrderCard(state.orders.find(o=>o.id===id),{language:language(),includeAddress:shareDraft.includeAddress,requestUrl:shareDraft.url});if(generation!==shareGeneration||ui.modal?.type!=='share'||ui.modal.id!==id)return;shareDraft.card=card;renderModal();}
+  catch(error){if(generation===shareGeneration&&ui.modal?.type==='share')modalError(error);}
 }
-function downloadCard(card=shareDraft.card) {if(!card)return;const url=URL.createObjectURL(card.blob);const link=document.createElement('a');link.href=url;link.download=card.filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-async function shareCard() {
-  if(!shareDraft.card)return;
-  const card=shareDraft.card;
-  const {blob,filename,caption}=card;
-  const files=[new File([blob],filename,{type:'image/png'})];
-  if(!navigator.canShare?.({files})||!navigator.share){downloadCard();toast('PNG скачан. Прикрепите его к сообщению в чате.');return;}
-  try{await navigator.share({files,title:'Handshake',text:caption});}catch(error){if(error.name!=='AbortError'){downloadCard(card);toast('Откройте скачанный PNG и отправьте его в чат.');}}
+async function copyRequestLink() {
+  try{await navigator.clipboard.writeText(shareDraft.url);toast('Ссылка скопирована');}
+  catch{$('#request-link')?.select();toast('Скопируйте ссылку из поля выше.',true);}
 }
-async function copyCaption() {try{await navigator.clipboard.writeText(shareDraft.card.caption);toast('Текст скопирован');}catch{$('#share-caption')?.select();toast('Выделите и скопируйте текст карточки.',true);}}
+async function nativeShareLink() {
+  if(!navigator.share)return copyRequestLink();
+  try{await navigator.share({title:'Handshake',url:shareDraft.url});}catch(error){if(error.name!=='AbortError')copyRequestLink();}
+}
+function localSharedOrder() {return state.orders.find(order=>order.owner==='me'&&(order.id===ui.sharedRequest?.id||order.replyToRequestId===ui.sharedRequest?.id));}
+function readSharedRoute() {
+  if(location.hash.startsWith('#/exchange/')){ui.sharedRequest=parseRequestLink(location.hash);ui.page='shared';ui.mode='client';ui.mobile=false;closeModal();}
+  else if(ui.page==='shared')ui.page='home';
+}
+window.addEventListener('hashchange',()=>{readSharedRoute();render();window.scrollTo({top:0});});
 function syncSidebar() { const sidebar=$('.sidebar'); if(sidebar) sidebar.inert=window.innerWidth<=700&&!ui.mobile; }
 window.addEventListener('resize',syncSidebar);
 function render() {
-  const content=ui.page==='home'?homePage(language()):ui.page==='exchange'?exchangePage():ui.page==='orders'?ordersPage():ui.page==='history'?ordersPage(true):ui.page==='feed'?feedPage():ui.page==='directions'?directionsPage():ui.page==='statistics'?statisticsPage():responsesPage();
+  const content=ui.page==='shared'?sharedRequestPage(ui.sharedRequest,sharingHelpers(),localSharedOrder()):ui.page==='vault'?vaultPage(state,vaultHelpers()):ui.page==='home'?homePage(language()):ui.page==='exchange'?exchangePage():ui.page==='orders'?ordersPage():ui.page==='history'?ordersPage(true):ui.page==='feed'?feedPage():ui.page==='directions'?directionsPage():ui.page==='statistics'?statisticsPage():responsesPage();
   $('#app').innerHTML=`${sidebar()}<div class="workspace">${header()}<main class="content">${content}<footer class="page-footer"><span>${icon('lock',10)}Демо: данные хранятся только в этом браузере</span><span>Сделки и курсы демонстрационные</span><button data-action="terms">Как работает Handshake ${icon('arrow',10)}</button></footer></main></div>`;
   localize($('#app'),language());
   document.title=t('Handshake — обмен по вашим правилам');
@@ -249,7 +273,7 @@ function orderModal(order) {
   body+=relatedOrders(order);
   if(order.status==='cancelled') body+='<div class="info-box">Поиск по этой заявке остановлен. Вы можете создать новый обмен с другими условиями.</div>';
   if(['searching','matched'].includes(order.status)) body+=`<div class="button-row"><button class="outline-button" data-action="close-modal">Вернуться к заявкам</button><button class="outline-button danger-button" data-action="cancel-confirm" data-id="${esc(order.id)}">Отменить заявку</button></div>`;
-  body+=`<button class="outline-button share-order-button" data-action="share-order" data-id="${esc(order.id)}">${icon('arrow',15)}Карточка для чата</button>`;
+  body+=`<button class="outline-button share-order-button" data-action="share-order" data-id="${esc(order.id)}">${icon('arrow',15)}Поделиться заявкой</button>`;
   return modalShell('Заявка на обмен',esc(shortId(order.id)),body);
 }
 function renderModal() {
@@ -268,7 +292,8 @@ function renderModal() {
     html=modalShell('Уведомления','Совпадения, предложения и изменения ваших заявок.',notices.length?notices.slice(0,20).map(n=>`<button class="notification-item" data-action="notification-order" data-id="${esc(n.orderId||'')}">${icon(n.type==='quote'?'cash':n.type==='match'?'spark':'bell',18)}<span><strong>${esc(n.title)}</strong><p>${esc(notificationMessage(n))}</p><p>${time(n.createdAt)}</p></span></button>`).join(''):empty('Всё спокойно','Здесь появятся уведомления о ваших обменах.'));
   }
   if(type==='kyc') html=modalShell('Проверка личности','Клиенты и провайдеры проходят KYC.',serviceContent('kyc'));
-  if(type==='preferences') html=modalShell('Язык и оформление','Выберите язык интерфейса и цветовую тему.',`${preferenceSelects()}<div class="info-box">Автоматическая тема следует настройке устройства.</div><p class="inset-notice">Настройки сохраняются в этом браузере.</p><button class="primary-button" data-action="close-modal">Готово ${icon('check',15)}</button>`);
+  if(type==='language'||type==='theme')html=modalShell(type==='language'?t('Язык интерфейса'):t('Оформление'),'',preferenceChoices(type));
+  if(type==='vault'){const view=vaultModal(state,ui.modal,vaultHelpers());html=modalShell(view.title,view.subtitle,view.body);}
   if(type==='profile') html=modalShell('Мой профиль','Демонстрационный аккаунт',`<div class="trust-card"><span class="avatar">НТ</span><div><strong>Тестовый пользователь</strong><p>Роль: ${ui.mode==='client'?'клиент':'провайдер наличных'}</p></div></div><div class="info-box">Данные сохраняются локально в этом браузере. Между устройствами и аккаунтами они не синхронизируются.</div><div class="button-row"><button class="outline-button" data-action="kyc">${icon('shield',15)}О проверке</button><button class="outline-button" data-action="reset-confirm">Начать демо заново</button></div>`);
   if(type==='reset-confirm') html=modalShell('Сбросить демоверсию?','',`<p class="subtle" style="line-height:1.8">Созданные в этом браузере заявки, направления и предложения будут удалены. Начальные примеры восстановятся.</p><div class="button-row"><button class="outline-button" data-action="close-modal">Оставить данные</button><button class="primary-button" data-action="reset-demo">Сбросить демо</button></div>`);
   if(type==='cancel-confirm') html=modalShell('Отменить заявку?','',`<p class="subtle" style="line-height:1.8">Подбор остановится, предложения закроются, а встречная заявка станет доступна другим клиентам.</p><div class="button-row"><button class="outline-button" data-action="order" data-id="${esc(id)}">Продолжить обмен</button><button class="primary-button" data-action="cancel-order" data-id="${esc(id)}">Отменить заявку</button></div>`);
@@ -280,7 +305,7 @@ function renderModal() {
 }
 function openModal(type,id) { focusReturn=document.activeElement; ui.modal={type,id}; renderModal(); queueMicrotask(()=>$('.modal .icon-button')?.focus()); }
 function closeModal() {ui.modal=null;renderModal();if(focusReturn?.isConnected)focusReturn.focus();}
-function navigate(page) {closeModal();if(page==='home')ui.mode='client';ui.page=page;ui.mobile=false;render();window.scrollTo({top:0,behavior:'smooth'});}
+function navigate(page) {closeModal();if(location.hash.startsWith('#/exchange/'))history.replaceState(null,'',location.pathname+location.search);if(page==='home')ui.mode='client';ui.page=page;ui.mobile=false;render();window.scrollTo({top:0,behavior:'smooth'});}
 function modalError(error) {const target=$('#modal-error');if(target)target.innerHTML=`<div class="error-message" role="alert">${esc(t(error.message||error))}</div>`;else toast(error.message||error,true);}
 function newDirection(order) { directionDraft=order?{give:{...order.receive},receive:{...order.give},min:Math.max(1,Math.floor(order.minReceive/2)),max:Math.ceil(order.minReceive*2),available:Math.ceil(order.minReceive*5)}:{give:{currency:'AMD',method:'cash',city:ui.location},receive:{currency:'USDT',method:'crypto',network:'TRC20'},min:100000,max:3000000,available:5000000};openModal('direction'); }
 function recomputeComposer() {composer.minReceive=amountFor(Number.isFinite(composer.amount)&&composer.amount>=0?composer.amount:0,composer.give.currency,composer.receive.currency);}
@@ -291,7 +316,7 @@ document.addEventListener('click',event=>{
   try {
     if(action==='navigate')navigate(el.dataset.page);
     else if(action==='home')navigate('home');
-    else if(action==='new-order'){ui.mode='client';navigate('exchange');$('#give-amount')?.focus();}
+    else if(action==='new-order'){delete composer.sharedRequest;ui.mode='client';navigate('exchange');$('#give-amount')?.focus();}
     else if(action==='open-feed'){ui.mode='provider';navigate('feed');}
     else if(action==='menu'){ui.mobile=!ui.mobile;render();}
     else if(action==='mode'){ui.mode=ui.mode==='client'?'provider':'client';navigate(ui.mode==='client'?'exchange':'feed');}
@@ -310,9 +335,28 @@ document.addEventListener('click',event=>{
     else if(action==='quote-mode'){quoteDraft.inputMode=el.dataset.mode;renderModal();}
     else if(action==='confirm-settlement'){confirmSettlement(state,id,el.dataset.actor);persist();render();renderModal();toast('Подтверждение сохранено');}
     else if(action==='share-order'){shareDraft={includeAddress:false,card:null};openModal('share',id);refreshShareCard();}
-    else if(action==='download-card')downloadCard();
-    else if(action==='native-share')shareCard();
-    else if(action==='copy-caption')copyCaption();
+    else if(action==='copy-request-link')copyRequestLink();
+    else if(action==='native-share-link')nativeShareLink();
+    else if(action==='respond-shared'){
+      const request=ui.sharedRequest;if(!request||request.snapshotStatus!=='open')throw new Error('Не удалось открыть заявку из ссылки.');
+      composer={give:{...request.receive},receive:{...request.give},amount:request.minReceive,minReceive:request.amount,partial:request.partial,sharedRequest:request};ui.mode='client';navigate('exchange');
+    }
+    else if(action==='clear-shared-reply'){delete composer.sharedRequest;render();}
+    else if(action==='set-language'||action==='set-theme'){closeModal();setPreferences({[action==='set-language'?'language':'theme']:el.dataset.value});}
+    else if(action==='vault-open'){ui.mode='provider';navigate('vault');}
+    else if(['vault-enable-review','vault-disable-review','vault-withdraw-review','vault-confirm-withdrawal-review'].includes(action)){
+      const mode={'vault-enable-review':'enable','vault-disable-review':'disable','vault-withdraw-review':'withdraw','vault-confirm-withdrawal-review':'confirm-withdrawal'}[action];
+      const config={type:'vault',mode,depositId:id};vaultModal(state,config,vaultHelpers());focusReturn=document.activeElement;ui.modal=config;renderModal();queueMicrotask(()=>$('.modal .icon-button')?.focus());
+    }
+    else if(['vault-enable-confirm','vault-disable-confirm','vault-deposit-confirm','vault-withdraw-confirm','vault-confirm-withdrawal'].includes(action)){
+      let message='Настройка vault обновлена';
+      if(action==='vault-enable-confirm')setVaultEnabled(state,true);
+      if(action==='vault-disable-confirm')setVaultEnabled(state,false);
+      if(action==='vault-deposit-confirm'){depositVault(state,ui.modal.amount);message='USDT заблокированы в демо-vault';}
+      if(action==='vault-withdraw-confirm'){requestVaultWithdrawal(state,id);message='Запрос на вывод сохранён';}
+      if(action==='vault-confirm-withdrawal'){confirmVaultWithdrawal(state,id);message='Вывод завершён в демо';}
+      persist();closeModal();render();toast(message);
+    }
     else if(action==='notification-order'){ui.mode='client';ui.page='orders';render();if(id)openModal('order',id);}
     else if(action==='close-modal')closeModal();
     else if(action==='backdrop'&&event.target===el)closeModal();
@@ -325,7 +369,7 @@ document.addEventListener('click',event=>{
     else if(action==='reset-filters'){Object.assign(ui,{filterCurrency:'all',filterCity:'all',filterMin:'',filterMax:'',onlyCompatible:true});render();}
     else if(action==='history-filter'){ui.history=el.dataset.value;render();}
     else if(action==='notifications'){state.notifications.forEach(n=>n.read=true);persist();render();openModal('notifications');}
-    else if(['kyc','profile','reset-confirm','help','about','terms','location','preferences'].includes(action))openModal(action);
+    else if(['kyc','profile','reset-confirm','help','about','terms','location','language','theme'].includes(action))openModal(action);
     else if(action==='save-location'){ui.location=$('#user-city').value;for(const end of [composer.give,composer.receive])if(end.method==='cash'){if(end.city!==ui.location)end.address='';end.city=ui.location;};closeModal();render();toast('Город обновлён');}
     else if(action==='reset-demo'){state=seedState();persist();ui.mode='client';navigate('exchange');toast('Демонстрационные данные восстановлены');}
   }catch(error){modalError(error);}
@@ -362,7 +406,10 @@ document.addEventListener('submit',event=>{
   try{
     if(event.target.id==='exchange-form'){
       composer.amount=parseAmount($('#give-amount').value);composer.minReceive=parseAmount($('#receive-amount').value);
-      const order=createOrder(state,composer);persist();render();openModal('order',order.id);toast(order.status==='matched'?'Нашли встречную заявку — условия совпали':'Заявка создана. Ищем подходящий обмен');
+      const order=composer.sharedRequest?createSharedReply(state,composer.sharedRequest,composer):createOrder(state,composer);delete composer.sharedRequest;persist();render();openModal('order',order.id);toast(order.status==='matched'?'Нашли встречную заявку — условия совпали':'Заявка создана. Ищем подходящий обмен');
+    }
+    if(event.target.id==='vault-deposit-form'){
+      const config={type:'vault',mode:'deposit',amount:parseAmount($('#vault-amount').value)};vaultModal(state,config,vaultHelpers());focusReturn=document.activeElement;ui.modal=config;renderModal();queueMicrotask(()=>$('.modal .icon-button')?.focus());
     }
     if(event.target.id==='quote-form'){
       quoteDraft[quoteDraft.inputMode==='rate'?'rate':'amount']=parseAmount($('#quote-value').value);
@@ -391,15 +438,16 @@ document.addEventListener('preferenceschange',event=>{
     const target=ui.modal?$('#overlay-root'):$('#app');
     if(focusPreference)target.querySelector(`[data-preference="${focusPreference}"]`)?.focus();
   }else{
-    document.querySelectorAll('[data-preference]').forEach(el=>{el.value=preferences[el.dataset.preference];});
+    render();renderModal();
   }
 });
 // Synchronize browser tabs without interrupting an in-progress form.
-window.addEventListener('storage',event=>{if(event.key===STORAGE_KEY&&event.newValue){try{const next=JSON.parse(event.newValue);if([1,2].includes(next.version)&&Array.isArray(next.orders)&&Array.isArray(next.directions)&&Array.isArray(next.notifications)){state=migrateState(next);if(!ui.modal){render();toast('Данные обновлены в другой вкладке');}}}catch{}}});
+window.addEventListener('storage',event=>{if(event.key===STORAGE_KEY&&event.newValue){try{const next=JSON.parse(event.newValue);if([1,2].includes(next.version)&&Array.isArray(next.orders)&&Array.isArray(next.directions)&&Array.isArray(next.notifications)){state=migrateState(next);if(ui.modal?.type==='vault'){closeModal();render();toast(language()==='en'?'Collateral changed in another tab. Review the amount again.':'Обеспечение изменилось в другой вкладке. Проверьте сумму заново.',true);return;}if(!ui.modal){render();toast('Данные обновлены в другой вкладке');}}}catch{}}});
 setInterval(()=>{
   if(ui.modal?.type==='order'&&!$('.modal input:focus')){
     const expired=[...document.querySelectorAll('[data-action="accept-quote"]')].some(el=>{const order=state.orders.find(o=>o.id===el.dataset.id);return !el.disabled&&order?.quotes.find(q=>q.id===el.dataset.quoteId)?.expiresAt<=Date.now();});
     if(expired)renderModal();
   }
 },1000);
+readSharedRoute();
 render();

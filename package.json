@@ -6,6 +6,6 @@
   "scripts": {
     "dev": "python3 -m http.server 4173 --bind 127.0.0.1 --directory dist",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check dist/app.js && node --check dist/domain.js && node --check dist/i18n.js && node --check dist/translations.js && node --check dist/preferences.js && node --check dist/theme-boot.js && node --check dist/share-card.js && node --check dist/service-content.js && node --check dist/currency-art.js && node --check dist/brand-story.js && node --check dist/home-page.js && node --check dist/endpoint-draft.js && node --check dist/bank-catalog.js && node --check dist/payment-details.js"
+    "check": "node --check dist/app.js && node --check dist/domain.js && node --check dist/i18n.js && node --check dist/translations.js && node --check dist/preferences.js && node --check dist/theme-boot.js && node --check dist/share-card.js && node --check dist/service-content.js && node --check dist/currency-art.js && node --check dist/brand-story.js && node --check dist/home-page.js && node --check dist/endpoint-draft.js && node --check dist/bank-catalog.js && node --check dist/payment-details.js && node --check dist/share-links.js && node --check dist/qr-code.js && node --check dist/sharing-ui.js && node --check dist/shared-reply.js && node --check dist/vault.js && node --check dist/vault-ui.js"
   }
 }

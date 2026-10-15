@@ -16,7 +16,12 @@ function oppositeSide(side) {
 
 export function availableCurrencies(draft, side) {
   const opposite = oppositeSide(side);
-  return CURRENCIES.filter(currency => currency.code !== draft[opposite]?.currency);
+  const end = draft[side];
+  const bank = BANKS.find(item => item.id === end?.bank);
+  return CURRENCIES.filter(currency => currency.code !== draft[opposite]?.currency
+    && (end?.method === 'bank' ? bank?.currencies.includes(currency.code)
+      : end?.method === 'crypto' ? cryptoCurrencies.has(currency.code)
+        : end?.method === 'cash' && !cryptoCurrencies.has(currency.code)));
 }
 
 export function updateEndpoint(draft, side, field, value, city = 'Ереван') {
@@ -30,14 +35,18 @@ export function updateEndpoint(draft, side, field, value, city = 'Ереван')
   if (field === 'bank' && !selectedBank) throw new Error('Выберите доступный банк.');
   const previous = draft[side];
   const next = { ...previous, [field]: value };
-  if (!methods.includes(next.method)) next.method = cryptoCurrencies.has(next.currency) ? 'crypto' : 'bank';
   if (field === 'currency') {
-    if (cryptoCurrencies.has(value)) next.method = 'crypto';
-    else if (next.method === 'crypto') next.method = 'bank';
+    if (!availableCurrencies(draft, side).some(currency => currency.code === value)) {
+      throw new Error('Выберите валюту, доступную для выбранного способа расчёта.');
+    }
+    if (next.method === 'crypto' && !networksFor(value).includes(next.network)) next.network = networksFor(value)[0];
+    draft[side] = next;
+    return next;
   }
+  if (!methods.includes(next.method)) throw new Error('Выберите способ передачи денег.');
   if (['country', 'bank'].includes(field) && next.method !== 'bank') throw new Error('Страна и банк доступны только для банковского перевода.');
   const explicitCountry = field === 'country' ? value : selectedBank?.country;
-  let choices = availableCurrencies(draft, side).filter(currency => isSupported(currency.code, next.method));
+  let choices = CURRENCIES.filter(currency => currency.code !== draft[opposite].currency && isSupported(currency.code, next.method));
   if (explicitCountry) choices = choices.filter(currency => banksFor(currency.code, explicitCountry).length > 0 && (!selectedBank || selectedBank.currencies.includes(currency.code)));
   if (!choices.some(currency => currency.code === next.currency)) {
     const localCurrency = COUNTRIES.find(country => country.code === explicitCountry)?.primaryCurrency;

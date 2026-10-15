@@ -30,13 +30,14 @@ function assertValid(draft) {
   }
 }
 
-test('currency menus exclude only the other side and remain correct after swapping', () => {
+test('currency menus follow the explicit method and bank before and after swapping', () => {
   const draft = fresh();
-  assert.deepEqual(availableCurrencies(draft, 'give').map(item => item.code), CURRENCIES.filter(item => item.code !== 'AMD').map(item => item.code));
-  assert.ok(!availableCurrencies(draft, 'receive').some(item => item.code === 'RUB'));
+  assert.deepEqual(availableCurrencies(draft, 'give').map(item => item.code), ['RUB']);
+  const cashCurrencies = CURRENCIES.filter(item => !['RUB', 'USDT', 'USDC'].includes(item.code)).map(item => item.code);
+  assert.deepEqual(availableCurrencies(draft, 'receive').map(item => item.code), cashCurrencies);
   [draft.give, draft.receive] = [draft.receive, draft.give];
-  assert.ok(!availableCurrencies(draft, 'give').some(item => item.code === 'RUB'));
-  assert.ok(!availableCurrencies(draft, 'receive').some(item => item.code === 'AMD'));
+  assert.deepEqual(availableCurrencies(draft, 'give').map(item => item.code), cashCurrencies);
+  assert.deepEqual(availableCurrencies(draft, 'receive').map(item => item.code), ['RUB']);
   assertValid(draft);
 });
 
@@ -53,15 +54,15 @@ test('method auto-selection avoids the counterpart and preserves its entire endp
   assertValid(draft);
 });
 
-test('explicit forbidden currency keeps the previous legal currency or chooses a fitting alternative', () => {
+test('unavailable currency rejects atomically instead of replacing the bank or method', () => {
   const draft = fresh();
-  updateEndpoint(draft, 'give', 'currency', 'AMD');
-  assert.equal(draft.give.currency, 'RUB');
-  assert.equal(draft.receive.currency, 'AMD');
-  updateEndpoint(draft, 'receive', 'currency', 'USDT');
-  updateEndpoint(draft, 'give', 'currency', 'USDT');
-  assert.equal(draft.give.currency, 'USDC');
+  const before = structuredClone(draft);
+  for (const code of ['AMD', 'USD', 'USDT', 'USDC']) assert.throws(() => updateEndpoint(draft, 'give', 'currency', code), /доступную/);
+  assert.throws(() => updateEndpoint(draft, 'receive', 'currency', 'USDT'), /доступную/);
+  assert.deepEqual(draft, before);
+  updateEndpoint(draft, 'receive', 'method', 'crypto');
   assert.equal(draft.receive.currency, 'USDT');
+  assert.deepEqual(availableCurrencies(draft, 'receive').map(item => item.code), ['USDT', 'USDC']);
   assertValid(draft);
 });
 
@@ -72,7 +73,7 @@ test('method switches preserve a supported old asset and normalize bank or netwo
   assert.equal(draft.receive.bank, 'ameria');
   updateEndpoint(draft, 'receive', 'bank', 'acba');
   assert.equal(draft.receive.bank, 'acba');
-  updateEndpoint(draft, 'receive', 'currency', 'USDT');
+  updateEndpoint(draft, 'receive', 'method', 'crypto');
   updateEndpoint(draft, 'receive', 'network', 'TRC20');
   updateEndpoint(draft, 'receive', 'currency', 'USDC');
   assert.equal(draft.receive.network, 'ERC20');
@@ -91,7 +92,7 @@ test('cash address survives unchanged city and is cleared when the city changes'
   assert.equal(draft.receive.city, 'Дубай');
 });
 
-test('all supported initial currency pairs survive both-side method switches and currency selections', () => {
+test('all initial currency pairs support explicit methods and only accept listed currencies without changing the bank', () => {
   for (const give of CURRENCIES) for (const receive of CURRENCIES) {
     if (give.code === receive.code) continue;
     for (const side of ['give', 'receive']) {
@@ -106,9 +107,19 @@ test('all supported initial currency pairs survive both-side method switches and
       }
       for (const selection of CURRENCIES) {
         const draft = { give: endpoint(give.code), receive: endpoint(receive.code) };
-        const unchanged = structuredClone(draft[opposite]);
-        updateEndpoint(draft, side, 'currency', selection.code);
-        assert.deepEqual(draft[opposite], unchanged);
+        const before = structuredClone(draft);
+        const listed = availableCurrencies(draft, side).some(item => item.code === selection.code);
+        if (listed) {
+          updateEndpoint(draft, side, 'currency', selection.code);
+          assert.equal(draft[side].currency, selection.code);
+          assert.equal(draft[side].bank, before[side].bank);
+          assert.equal(draft[side].country, before[side].country);
+          assert.equal(draft[side].method, before[side].method);
+        } else {
+          assert.throws(() => updateEndpoint(draft, side, 'currency', selection.code));
+          assert.deepEqual(draft, before);
+        }
+        assert.deepEqual(draft[opposite], before[opposite]);
         assertValid(draft);
       }
     }
@@ -158,17 +169,53 @@ test('country changes can select their local asset without duplicating the count
   assertValid(draft);
 });
 
-test('currency changes retain a compatible country or derive a new one', () => {
+test('currency changes keep exactly the selected bank and country', () => {
   const draft = { give: { currency: 'USD', method: 'bank', bank: 'credo', country: 'GE' }, receive: endpoint('USDT') };
   updateEndpoint(draft, 'give', 'currency', 'EUR');
   assert.equal(draft.give.country, 'GE');
   assert.equal(draft.give.bank, 'credo');
-  updateEndpoint(draft, 'give', 'currency', 'RUB');
-  assert.equal(draft.give.country, 'RU');
-  assert.equal(draft.give.bank, 'tbank');
-  updateEndpoint(draft, 'give', 'currency', 'AED');
-  assert.equal(draft.give.country, 'AE');
-  assert.ok(banksFor('AED', 'AE').some(bank => bank.id === draft.give.bank));
+  const before = structuredClone(draft);
+  assert.throws(() => updateEndpoint(draft, 'give', 'currency', 'RUB'));
+  assert.throws(() => updateEndpoint(draft, 'give', 'currency', 'AED'));
+  assert.deepEqual(draft, before);
+  assertValid(draft);
+});
+
+test('every bank offers only its explicit currencies minus the counterpart asset', () => {
+  for (const bank of BANKS) for (const opposite of CURRENCIES) {
+    const draft = { give: { method: 'bank', bank: bank.id, country: bank.country, currency: bank.currencies[0] }, receive: endpoint(opposite.code) };
+    assert.deepEqual(availableCurrencies(draft, 'give').map(item => item.code), CURRENCIES.filter(item => item.code !== opposite.code && bank.currencies.includes(item.code)).map(item => item.code), `${bank.id}/${opposite.code}`);
+  }
+  const unknown = { give: { method: 'bank', currency: 'USD', bank: 'unknown' }, receive: endpoint('RUB') };
+  assert.deepEqual(availableCurrencies(unknown, 'give'), []);
+});
+
+test('bank selection may change currency but cannot consume the opposite asset', () => {
+  const draft = { give: { currency: 'USD', method: 'bank', bank: 'halyk', country: 'KZ' }, receive: endpoint('USDT') };
+  updateEndpoint(draft, 'give', 'bank', 'kaspi');
+  assert.deepEqual(draft.give, { currency: 'KZT', method: 'bank', bank: 'kaspi', country: 'KZ' });
+  assert.deepEqual(availableCurrencies(draft, 'give').map(item => item.code), ['KZT']);
+  updateEndpoint(draft, 'give', 'bank', 'bcc');
+  updateEndpoint(draft, 'give', 'currency', 'USD');
+  assert.equal(draft.give.bank, 'bcc');
+  draft.receive = { currency: 'KZT', method: 'cash', city: 'Алматы', address: 'Демо: центр' };
+  const before = structuredClone(draft);
+  assert.throws(() => updateEndpoint(draft, 'give', 'bank', 'kaspi'), /Нет доступной валюты/);
+  assert.deepEqual(draft, before);
+});
+
+test('country and method transitions use the full catalog rather than the old bank menu', () => {
+  const draft = fresh();
+  assert.deepEqual(availableCurrencies(draft, 'give').map(item => item.code), ['RUB']);
+  updateEndpoint(draft, 'give', 'country', 'KZ');
+  assert.equal(draft.give.currency, 'KZT');
+  assert.equal(draft.give.bank, 'halyk');
+  updateEndpoint(draft, 'give', 'method', 'crypto');
+  assert.equal(draft.give.currency, 'USDT');
+  updateEndpoint(draft, 'give', 'method', 'cash', 'Астана');
+  assert.equal(draft.give.method, 'cash');
+  assert.equal(draft.give.city, 'Астана');
+  assert.ok(!['USDT', 'USDC', 'AMD'].includes(draft.give.currency));
   assertValid(draft);
 });
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCardData } from '../dist/share-card.js';
+import { buildRequestLink } from '../dist/share-links.js';
 
 const now = Date.UTC(2026, 9, 15, 10, 30);
 function order(overrides = {}) {
@@ -141,4 +142,37 @@ test('crypto payouts preserve all six decimals, including a one-micro-unit amoun
   const russian = buildCardData(source, { language: 'ru', now });
   assert.equal(russian.give.amountText, '12,345678');
   assert.equal(russian.receive.amountText, '0,000001');
+});
+
+test('an explicitly supplied public request URL is included in the caption', () => {
+  const source = order({ id: 'HS-Заявка-42', requestUrl: 'https://private-preview.example/PRIVATE', paymentDetails: { wallet: 'PRIVATE_WALLET' } });
+  const requestUrl = buildRequestLink(source);
+  const data = buildCardData(source, { requestUrl, now });
+  assert.equal(data.id, source.id);
+  assert.equal(data.requestUrl, requestUrl);
+  assert.ok(data.caption.endsWith(requestUrl));
+  assert.ok(!JSON.stringify(data).includes('PRIVATE'));
+  assert.equal(buildCardData(source, { now }).requestUrl, '');
+});
+
+test('QR links cannot bypass card address privacy or point at another request', () => {
+  const source = order();
+  const addressLink = buildRequestLink(source, { includeAddress: true });
+  assert.throws(() => buildCardData(source, { requestUrl: addressLink, now }));
+  assert.equal(buildCardData(source, { requestUrl: addressLink, includeAddress: true, now }).requestUrl, addressLink);
+  for (const requestUrl of [
+    buildRequestLink(order({ id: 'another-request' })),
+    buildRequestLink(order({ minReceive: 400000 })),
+    buildRequestLink(source, { baseUrl: 'https://private-preview.example/' }),
+    'javascript:alert(1)',
+    'https://nt1tov.github.io/handshake_exchange/#/exchange/no-payload',
+  ]) assert.throws(() => buildCardData(source, { requestUrl, now }));
+});
+
+test('Kazakhstan bank and city labels are localized in shared cards', () => {
+  const source = order({ give: { currency: 'USD', method: 'bank', bank: 'bcc' }, receive: { currency: 'KZT', method: 'cash', city: 'Алматы' } });
+  const data = buildCardData(source, { language: 'en', now });
+  assert.equal(data.give.detail, 'Bank CenterCredit');
+  assert.equal(data.receive.detail, 'Almaty');
+  assert.ok(!/[А-Яа-яЁё]/.test(data.caption));
 });
