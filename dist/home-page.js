@@ -1,4 +1,4 @@
-import { brandStory } from './brand-story.js';
+import { brandStory } from './brand-story.js?v=20261016-cities';
 
 const copy = {
   ru: {

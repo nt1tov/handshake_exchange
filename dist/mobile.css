@@ -255,9 +255,10 @@
   .brand-story-copy p { font-size: 15px; line-height: 1.75; }
   .brand-story-links { gap: 8px; }
   .brand-story-links a, .brand-story-links button { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; line-height: 1.5; }
-  .brand-story-route { display: grid; grid-template-columns: minmax(0, 1fr) 14px auto 14px minmax(0, 1fr); gap: 4px; }
-  .brand-story-route>span:not(.brand-story-wordmark) { font-size: 12px; line-height: 1.5; max-width: none; }
-  .brand-story-route .brand-story-arrow { font-size: 18px; text-align: center; }
+  .brand-story-route { display: flex; flex-direction: column; gap: 7px; padding-bottom: 20px; }
+  .brand-story-route>span.brand-story-city { font-size: 16px; height: 30px; }
+  .brand-story-route>span:not(.brand-story-wordmark):not(.brand-story-city) { font-size: 12px; line-height: 1.5; max-width: none; }
+  .brand-story-route .brand-story-arrow { font-size: 18px; text-align: center; transform: rotate(90deg); }
   .brand-story-wordmark { font-size: 14px; gap: 4px; padding: 9px 6px; white-space: nowrap; }
   .brand-story-wordmark:before { width: 20px; height: 20px; }
   .page-footer { flex-wrap: wrap; align-items: flex-start; gap: 10px; margin-top: 28px; font-size: 12px; line-height: 1.6; }

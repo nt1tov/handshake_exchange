@@ -8,7 +8,8 @@ import { vaultPage, vaultSummaryCard, vaultModal } from './vault-ui.js';
 import { createOrderCard } from './share-card.js';
 import { serviceContent } from './service-content.js';
 import { currencyPairArt } from './currency-art.js';
-import { homePage } from './home-page.js';
+import { homePage } from './home-page.js?v=20261016-cities';
+import { startCityRotation } from './brand-story.js?v=20261016-cities';
 import { availableCurrencies, updateEndpoint } from './endpoint-draft.js';
 import { COUNTRIES, bankCountry } from './bank-catalog.js';
 import { paymentFields, createDemoPaymentDetails, setPaymentDetails } from './payment-details.js';
@@ -248,10 +249,13 @@ function readSharedRoute() {
 window.addEventListener('hashchange',()=>{readSharedRoute();render();window.scrollTo({top:0});});
 function syncSidebar() { const sidebar=$('.sidebar'); if(sidebar) sidebar.inert=window.innerWidth<=700&&!ui.mobile; }
 window.addEventListener('resize',syncSidebar);
+let stopCityRotation = () => {};
 function render() {
+  stopCityRotation();
   const content=ui.page==='shared'?sharedRequestPage(ui.sharedRequest,sharingHelpers(),localSharedOrder()):ui.page==='vault'?vaultPage(state,vaultHelpers()):ui.page==='home'?homePage(language()):ui.page==='exchange'?exchangePage():ui.page==='orders'?ordersPage():ui.page==='history'?ordersPage(true):ui.page==='feed'?feedPage():ui.page==='directions'?directionsPage():ui.page==='statistics'?statisticsPage():responsesPage();
   $('#app').innerHTML=`${sidebar()}<div class="workspace">${header()}<main class="content">${content}<footer class="page-footer"><span>${icon('lock',10)}Демо: данные хранятся только в этом браузере</span><span>Сделки и курсы демонстрационные</span><button data-action="terms">Как работает Handshake ${icon('arrow',10)}</button></footer></main></div>`;
   localize($('#app'),language());
+  stopCityRotation=startCityRotation($('#app'));
   document.title=t('Handshake — обмен по вашим правилам');
   document.querySelector('meta[name=description]').content=t('Handshake — обмен по вашим правилам. Создайте заявку, найдите встречный обмен или получите предложение наличных.');
   fitAmounts();
