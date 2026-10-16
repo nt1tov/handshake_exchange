@@ -622,6 +622,100 @@ test('partial matching chooses the actual largest received amount, not the unspl
   assert.deepEqual(orderExecution(order), { giveAmount: 100, receiveAmount: 95 });
 });
 
+test('automatic partial matching chooses the best executed unit rate before the largest total', () => {
+  const state = partialState();
+  state.orders.push(partialPeer(95, 100, false, 'largest-total'), partialPeer(45, 40, false, 'best-rate'));
+  const order = createOrder(state, { ...partialInput(), pricingMode: 'auto' });
+  assert.equal(order.pricingMode, 'auto');
+  assert.equal(order.minReceive, 90);
+  assert.equal(order.matchedOrderId, 'best-rate');
+  assert.deepEqual(orderExecution(order), { giveAmount: 40, receiveAmount: 45 });
+  acceptMatch(state, order.id);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.equal(remainder.pricingMode, 'auto');
+  assert.equal(remainder.minReceive, 54);
+  assert.equal(remainder.amount, 60);
+  assert.equal(state.orders.find(item => item.id === 'largest-total').status, 'searching');
+});
+
+test('automatic matching still honors minimum receive, full-only peers and payment endpoints', () => {
+  const state = partialState();
+  state.orders.push(partialPeer(99, 100, false, 'below-minimum'), partialPeer(220, 200, false, 'oversized-full'),
+    { ...partialPeer(120, 100, false, 'wrong-bank'), receive: { ...partialInput().give, bank: 'enbd' } },
+    partialPeer(105, 100, false, 'eligible'));
+  const order = createOrder(state, { ...partialInput(false), pricingMode: 'auto', minReceive: 100 });
+  assert.equal(order.matchedOrderId, 'eligible');
+  assert.deepEqual(orderExecution(order), { giveAmount: 100, receiveAmount: 105 });
+});
+
+test('equal direct rates prefer the larger eligible fill and then the older peer', () => {
+  const state = partialState();
+  state.orders.push(partialPeer(25, 25, false, 'small'),
+    { ...partialPeer(50, 50, false, 'newer'), createdAt: 10 },
+    { ...partialPeer(50, 50, false, 'older'), createdAt: 5 });
+  const order = createOrder(state, { ...partialInput(), pricingMode: 'auto' });
+  assert.equal(order.matchedOrderId, 'older');
+});
+
+test('manual client rates define the minimum while legacy and targeted requests retain explicit terms', () => {
+  const state = partialState();
+  const manual = createOrder(state, { ...partialInput(), pricingMode: 'manual', manualRate: 0.97, minReceive: 1 });
+  assert.equal(manual.minReceive, 97);
+  assert.equal(manual.manualRate, 0.97);
+  const legacy = createOrder(state, { ...partialInput(), minReceive: 99, manualRate: 1.5 });
+  assert.equal(legacy.minReceive, 99);
+  assert.equal(legacy.pricingMode, undefined);
+  assert.equal(legacy.manualRate, undefined);
+  state.orders.push(partialPeer(80, 100, false, 'linked-low-rate'));
+  const linked = createOrder(state, { ...partialInput(false), minReceive: 80, matchTargetId: 'linked-low-rate' });
+  assert.equal(linked.minReceive, 80);
+  assert.equal(linked.matchedOrderId, 'linked-low-rate');
+});
+
+test('manual pricing rejects invalid inputs atomically and preserves its metadata through provider splits', () => {
+  const state = partialState();
+  partialDirection(state);
+  for (const changes of [{ pricingMode: 'other' }, { pricingMode: null }, { pricingMode: 'manual' }, { pricingMode: 'manual', manualRate: 0 }, { pricingMode: 'manual', manualRate: Infinity }]) {
+    const before = structuredClone(state);
+    assert.throws(() => createOrder(state, { ...partialInput(), ...changes }));
+    assert.deepEqual(state, before);
+  }
+  const order = createOrder(state, { ...partialInput(), pricingMode: 'manual', manualRate: 0.92345 });
+  assert.equal(order.minReceive, 92.35);
+  const quote = submitQuote(state, order.id, { giveAmount: 40, amount: 37, incomeUSDT: 0 });
+  acceptQuote(state, order.id, quote.id);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.equal(remainder.pricingMode, 'manual');
+  assert.equal(remainder.manualRate, 0.92345);
+  assert.equal(order.minReceive + remainder.minReceive, 92.35);
+  assert.equal(order.amount + remainder.amount, 100);
+});
+
+test('every manual remainder keeps the selected rate floor after currency rounding', () => {
+  const state = partialState();
+  partialDirection(state, { min: 0.01 });
+  const order = createOrder(state, { ...partialInput(), amount: 10, pricingMode: 'manual', manualRate: 0.33333 });
+  assert.equal(order.minReceive, 3.34);
+  const quote = submitQuote(state, order.id, { giveAmount: 3, amount: 1.01 });
+  acceptQuote(state, order.id, quote.id);
+  const remainder = state.orders.find(item => item.id === order.remainderOrderId);
+  assert.equal(remainder.amount, 7);
+  assert.equal(remainder.minReceive, 2.34);
+  assert.deepEqual(orderExecution(remainder), { giveAmount: 7, receiveAmount: 2.34 });
+  assert.equal(order.amount + remainder.amount, 10);
+  assert.equal(order.minReceive, 1.01);
+  const before = structuredClone(state);
+  assert.throws(() => submitQuote(state, remainder.id, 2.33), /ниже минимальной/);
+  assert.deepEqual(state, before);
+  state.orders.push(partialPeer(2.33, 7, false, 'worse-than-own-rate'));
+  assert.equal(findMatch(state, remainder), null);
+  state.orders.push(partialPeer(2.34, 7, false, 'meets-own-rate'));
+  assert.equal(findMatch(state, remainder).id, 'meets-own-rate');
+  const remainderQuote = submitQuote(state, remainder.id, 2.34);
+  remainderQuote.amount = 2.33;
+  assert.throws(() => acceptQuote(state, remainder.id, remainderQuote.id), /ниже пропорционального/);
+});
+
 test('partial quote uses its chosen give amount for rates and keeps the pending request unchanged', () => {
   const state = partialState();
   partialDirection(state);

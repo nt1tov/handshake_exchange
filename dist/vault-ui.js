@@ -1,3 +1,4 @@
+import { formatMoney } from './money-format.js';
 import { vaultMetrics } from './vault.js';
 
 const copy = {
@@ -51,7 +52,7 @@ function helpers(options = {}) {
   return {
     text: copy[locale], locale,
     esc: options.esc || (value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])),
-    fmt: options.fmt || (value => new Intl.NumberFormat(locale, { maximumFractionDigits: 6 }).format(value)),
+    fmt: options.fmt || (value => formatMoney(value,locale.startsWith('en')?'en':'ru')),
     icon: options.icon || (() => ''),
   };
 }

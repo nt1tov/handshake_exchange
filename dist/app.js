@@ -1,4 +1,4 @@
-import { CURRENCIES, BANKS, CITIES, NETWORKS, seedState, migrateState, createOrder, acceptMatch, submitQuote, acceptQuote, cancelOrder, addDirection, toggleDirection, isDirectionCompatible, amountFor, confirmSettlement, providerMetrics, orderExecution, reportProblem } from './domain.js';
+import { CURRENCIES, BANKS, CITIES, NETWORKS, seedState, migrateState, createOrder, acceptMatch, submitQuote, acceptQuote, cancelOrder, addDirection, toggleDirection, isDirectionCompatible, amountFor, referenceRate, confirmSettlement, providerMetrics, orderExecution, reportProblem } from './domain.js';
 import { buildRequestLink, parseRequestLink } from './share-links.js';
 import { createQRCode } from './qr-code.js';
 import { shareDialog, sharedRequestPage } from './sharing-ui.js';
@@ -8,13 +8,18 @@ import { vaultPage, vaultSummaryCard, vaultModal } from './vault-ui.js';
 import { createOrderCard } from './share-card.js';
 import { serviceContent } from './service-content.js';
 import { currencyPairArt } from './currency-art.js';
-import { homePage } from './home-page.js?v=20261016-cities';
-import { startCityRotation } from './brand-story.js?v=20261016-cities';
+import { homePage } from './home-page.js?v=20261016-access';
+import { headerCityLogo, startCityRotation } from './brand-story.js?v=20261016-access';
+import { startCurrencyOrbits } from './currency-orbits.js?v=20261016-access';
+import { formatMoney } from './money-format.js';
+import { calculateClientPricing, rateDisplay } from './client-pricing.js';
+import { ACCESS_STORAGE_KEY, createAccessState, loadAccessState, redeemInvite, completeAccount, completeVerificationStep, submitVerification, demoReview, restartVerification, accessSummary, canTrade } from './access-model.js';
+import { renderAccessPage, accessStatusLabel } from './access-ui.js';
 import { availableCurrencies, updateEndpoint } from './endpoint-draft.js';
 import { COUNTRIES, bankCountry } from './bank-catalog.js';
 import { paymentFields, createDemoPaymentDetails, setPaymentDetails } from './payment-details.js';
 
-import { LANGUAGES, translate, localize, formatNumber, parseNumber, formatTime } from './i18n.js?v=20261015-vault';
+import { LANGUAGES, translate, localize, formatNumber, parseNumber, formatTime } from './i18n.js?v=20261016-access';
 import { getPreferences, setPreferences, initializePreferences } from './preferences.js';
 
 initializePreferences();
@@ -25,6 +30,7 @@ const STORAGE_KEY = 'handshake-demo-v1';
 const $ = (selector) => document.querySelector(selector);
 const esc = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const paths = {
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
   moon: '<path d="M20.5 13A9 9 0 0 1 11 3.5 9 9 0 1 0 20.5 13Z"/>',
   monitor: '<rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-4 0h8"/>',
@@ -62,7 +68,7 @@ const currency = code => CURRENCIES.find(c => c.code === code);
 const coin = code => `<span class="currency-icon ${esc(code.toLowerCase())}" aria-hidden="true">${esc(currency(code)?.symbol || code)}</span>`;
 const fmt = value => formatNumber(value, language());
 const symbol = code => currency(code)?.symbol || code;
-const fmtAmount = (amount, code) => new Intl.NumberFormat(language(),{maximumFractionDigits:['USDT','USDC'].includes(code)?6:2}).format(amount);
+const fmtAmount = amount => formatMoney(amount,language());
 const money = (amount, code) => `${fmtAmount(amount,code)} ${symbol(code)}`;
 const parseAmount = value => parseNumber(value, language());
 function fitAmounts() { document.querySelectorAll('.amount-input').forEach(el=>el.classList.toggle('long-amount',el.value.length>11)); }
@@ -71,8 +77,13 @@ const options = (items, selected, valueFn = v => v, labelFn = v => v) => items.m
 let storageAvailable = true;
 let state;
 try { const saved = JSON.parse(localStorage.getItem(STORAGE_KEY)); state = [1,2].includes(saved?.version) && Array.isArray(saved.orders) && Array.isArray(saved.directions) && Array.isArray(saved.notifications) ? migrateState(saved) : seedState(); } catch { state = seedState(); }
+let access;
+try {access=loadAccessState(localStorage.getItem(ACCESS_STORAGE_KEY));}catch{access=createAccessState();}
+let accessError='';
+function refreshAccess(){render();const heading=$('.access-main h2');if(heading){heading.tabIndex=-1;heading.focus();}}
+function persistAccess(){try{localStorage.setItem(ACCESS_STORAGE_KEY,JSON.stringify(access));}catch{toast(language()==='en'?'Progress is saved for this visit only.':'Прогресс сохранён только на время этого посещения.',true);}}
 const ui = { mode: 'client', page: 'home', history: 'all', mobile: false, modal: null, location: 'Ереван', filterCurrency: 'all', filterCity: 'all', filterMin: '', filterMax: '', onlyCompatible: true };
-let composer = { give: {currency:'RUB', method:'bank', bank:'tbank'}, receive: {currency:'AMD', method:'cash',city:'Ереван'}, partial:false, amount:100000, minReceive:amountFor(100000,'RUB','AMD') };
+let composer = { give: {currency:'RUB', method:'bank', bank:'tbank'}, receive: {currency:'AMD', method:'cash',city:'Ереван'}, pricingMode:'auto',partial:false, amount:100000, minReceive:amountFor(100000,'RUB','AMD') };
 let directionDraft = {give:{currency:'AMD',method:'cash',city:'Ереван'},receive:{currency:'USDT',method:'crypto',network:'TRC20'},min:100000,max:3000000,available:5000000};
 let toastTimer;
 let quoteDraft = {inputMode:'amount',amount:0,rate:0,incomeUSDT:0};
@@ -94,7 +105,7 @@ function endpointEditor(end, side, scope='composer') {
   const selector = end.method==='bank'
     ? `<select class="context-select" aria-label="${side==='give'?'Банк отправления':'Банк получения'}" data-endpoint="${side}" data-field="bank" data-scope="${scope}"><optgroup label="Банки">${options(selectableBanks.filter(b=>b.kind==='bank'),end.bank,b=>b.id,b=>b.name)}</optgroup><optgroup label="Платёжные сервисы">${options(selectableBanks.filter(b=>b.kind==='fintech'),end.bank,b=>b.id,b=>b.name)}</optgroup></select>`
     : `<select class="context-select" aria-label="${end.method==='cash'?'Город':'Сеть'} ${side==='give'?'отправления':'получения'}" data-endpoint="${side}" data-field="${end.method==='cash'?'city':'network'}" data-scope="${scope}">${options(end.method==='cash'?CITIES:networkOptions(end.currency),end.method==='cash'?end.city:end.network)}</select>`;
-  return `<div class="endpoint-card"><div class="endpoint-top"><span class="field-label">${side==='give'?'Отдаёте':'Получаете'}</span>${side==='receive'&&isComposer?'<span class="endpoint-help">Не меньше этой суммы</span>':''}</div><div class="amount-line">${isComposer?`<input class="amount-input" type="text" inputmode="decimal" autocomplete="off" aria-label="${side==='give'?'Сумма отправления':'Минимальная сумма получения'}" id="${side==='give'?'give-amount':'receive-amount'}" value="${fmtAmount(side==='give'?composer.amount:composer.minReceive,end.currency)}">`:`<span class="subtle">${side==='give'?'Средства провайдера':'Средства клиента'}</span>`}<div class="currency-wrap">${coin(end.currency)}<select class="currency-select" aria-label="${side==='give'?'Валюта отправления':'Валюта получения'}" data-endpoint="${side}" data-field="currency" data-scope="${scope}">${options(availableCurrencies(draft,side),end.currency,c=>c.code,c=>c.code)}</select></div></div><div class="method-tabs" role="group" aria-label="Способ ${side==='give'?'отправления':'получения'}">${[['bank','Банк'],['cash','Наличные'],['crypto','Крипта']].map(([key,label])=>`<button type="button" class="method-tab ${end.method===key?'active':''}" data-action="method" data-scope="${scope}" data-side="${side}" data-method="${key}" aria-pressed="${end.method===key}">${icon(key,14)}${label}</button>`).join('')}</div>${end.method==='bank'?`<label class="bank-country"><span class="field-label">Страна банка</span><select class="context-select" aria-label="${side==='give'?'Страна банка отправления':'Страна банка получения'}" data-endpoint="${side}" data-field="country" data-scope="${scope}">${options(COUNTRIES,country,c=>c.code,c=>c.name)}</select></label>`:''}<div class="context-row"><span class="context-icon ${end.method}" ${end.method==='bank'?`style="background:${bank?.color||'#eee'}22;color:${bank?.color||'#999'}"`:''}>${end.method==='bank'?esc(t(bank?.name||'Банк')[0]):icon(end.method==='cash'?'pin':'crypto',14)}</span>${selector}${end.method==='cash'?'<span class="endpoint-help">Лично</span>':''}</div>${end.method==='cash'?`<label class="address-field"><span class="field-label">Район или ориентир</span><input class="input-field" aria-label="${side==='give'?'Адрес передачи наличных':'Адрес получения наличных'}" data-cash-address="${side}" data-scope="${scope}" placeholder="Например, Кентрон, площадь Республики" value="${esc(end.address||'')}" minlength="3" maxlength="160" required><span class="endpoint-help">Достаточно примерного адреса. Точку встречи согласуете позже.</span></label>`:''}</div>`;
+  return `<div class="endpoint-card"><div class="endpoint-top"><span class="field-label">${side==='give'?'Отдаёте':'Получаете'}</span>${side==='receive'&&isComposer?`<span class="endpoint-help">${composer.pricingMode==='manual'||composer.sharedRequest?'Не меньше этой суммы':language()==='en'?'Estimated amount':'Ориентировочно'}</span>`:''}</div><div class="amount-line">${isComposer?`<input class="amount-input" type="text" inputmode="decimal" autocomplete="off" aria-label="${side==='give'?'Сумма отправления':'Минимальная сумма получения'}" id="${side==='give'?'give-amount':'receive-amount'}" ${side==='receive'?'readonly':''} value="${fmtAmount(side==='give'?composer.amount:composer.minReceive,end.currency)}">`:`<span class="subtle">${side==='give'?'Средства провайдера':'Средства клиента'}</span>`}<div class="currency-wrap">${coin(end.currency)}<select class="currency-select" aria-label="${side==='give'?'Валюта отправления':'Валюта получения'}" data-endpoint="${side}" data-field="currency" data-scope="${scope}">${options(availableCurrencies(draft,side),end.currency,c=>c.code,c=>c.code)}</select></div></div><div class="method-tabs" role="group" aria-label="Способ ${side==='give'?'отправления':'получения'}">${[['bank','Банк'],['cash','Наличные'],['crypto','Крипта']].map(([key,label])=>`<button type="button" class="method-tab ${end.method===key?'active':''}" data-action="method" data-scope="${scope}" data-side="${side}" data-method="${key}" aria-pressed="${end.method===key}">${icon(key,14)}${label}</button>`).join('')}</div>${end.method==='bank'?`<label class="bank-country"><span class="field-label">Страна банка</span><select class="context-select" aria-label="${side==='give'?'Страна банка отправления':'Страна банка получения'}" data-endpoint="${side}" data-field="country" data-scope="${scope}">${options(COUNTRIES,country,c=>c.code,c=>c.name)}</select></label>`:''}<div class="context-row"><span class="context-icon ${end.method}" ${end.method==='bank'?`style="background:${bank?.color||'#eee'}22;color:${bank?.color||'#999'}"`:''}>${end.method==='bank'?esc(t(bank?.name||'Банк')[0]):icon(end.method==='cash'?'pin':'crypto',14)}</span>${selector}${end.method==='cash'?'<span class="endpoint-help">Лично</span>':''}</div>${end.method==='cash'?`<label class="address-field"><span class="field-label">Район или ориентир</span><input class="input-field" aria-label="${side==='give'?'Адрес передачи наличных':'Адрес получения наличных'}" data-cash-address="${side}" data-scope="${scope}" placeholder="Например, Кентрон, площадь Республики" value="${esc(end.address||'')}" minlength="3" maxlength="160" required><span class="endpoint-help">Достаточно примерного адреса. Точку встречи согласуете позже.</span></label>`:''}</div>`;
 }
 const ownOrders = () => state.orders.filter(o=>o.owner==='me');
 const activeOrders = () => ownOrders().filter(o=>['searching','matched','agreed'].includes(o.status));
@@ -119,12 +130,24 @@ function sharedComposerNote() {
 function sidebar() {
   const provider=ui.mode==='provider';
   const nav = [['home','home','Главная',''],...(provider ? [['feed','orders','Входящие заявки',state.orders.filter(o=>state.directions.some(d=>isDirectionCompatible(d,o))).length],['directions','wallet','Моя ликвидность',''],['vault','lock','Доходный vault',''],['responses','orders','Мои предложения',''],['statistics','grid','Сделки и доход','']] : [['exchange','exchange','Обмен',''],['orders','orders','Мои заявки',activeOrders().length],['history','history','История','']])];
-  return `<div class="mobile-scrim ${ui.mobile?'visible':''}" data-action="menu"></div><aside class="sidebar ${ui.mobile?'mobile-open':''}"><a class="brand" href="#" data-action="home" aria-label="Handshake — главная"><img src="./favicon.svg" alt="">handshake<span class="brand-period">.</span></a><div class="sidebar-caption">${provider?'Рабочее пространство':'Личный кабинет'}</div><nav class="nav-list" aria-label="Основная навигация">${nav.map(([page,name,label,count])=>`<button class="nav-item ${ui.page===page?'active':''}" data-action="navigate" data-page="${page}" ${ui.page===page?'aria-current="page"':''}>${icon(name,18)}${label}${count?`<span class="count">${count}</span>`:''}</button>`).join('')}</nav><div class="sidebar-bottom"><button class="provider-switch" data-action="mode">${icon(provider?'exchange':'briefcase',19)}<span>${provider?'Режим клиента':'Кабинет провайдера'}<small>${provider?'Вернуться к обмену':'Предлагайте свои условия'}</small></span>${icon('chevron',13)}</button><div class="side-bottom-links"><button class="text-button" data-action="help">${icon('help',15)}Поддержка</button><span>·</span><button class="text-button" data-action="about">О проекте</button></div><div class="side-footer"><span>© Handshake, 2026</span></div></div></aside>`;
+  return `<div class="mobile-scrim ${ui.mobile?'visible':''}" data-action="menu"></div><aside class="sidebar ${ui.mobile?'mobile-open':''}">${headerCityLogo(language())}<div class="sidebar-caption">${provider?'Рабочее пространство':'Личный кабинет'}</div><nav class="nav-list" aria-label="Основная навигация">${nav.map(([page,name,label,count])=>`<button class="nav-item ${ui.page===page?'active':''}" data-action="navigate" data-page="${page}" ${ui.page===page?'aria-current="page"':''}>${icon(name,18)}${label}${count?`<span class="count">${count}</span>`:''}</button>`).join('')}</nav><div class="sidebar-bottom"><button class="provider-switch" data-action="mode">${icon(provider?'exchange':'briefcase',19)}<span>${provider?'Режим клиента':'Кабинет провайдера'}<small>${provider?'Вернуться к обмену':'Предлагайте свои условия'}</small></span>${icon('chevron',13)}</button><div class="side-bottom-links"><button class="text-button" data-action="help">${icon('help',15)}Поддержка</button><span>·</span><button class="text-button" data-action="about">О проекте</button></div><div class="side-footer"><span>© Handshake, 2026</span></div></div></aside>`;
 }
-const pageTitles = {home:'Главная',exchange:'Обмен',orders:'Мои заявки',history:'История',feed:'Входящие заявки',directions:'Моя ликвидность',responses:'Мои предложения',statistics:'Сделки и доход',vault:'Доходный vault',shared:'Заявка по ссылке'};
-function header() { return `<header class="topbar"><button class="icon-button mobile-menu" data-action="menu" aria-label="Открыть меню">${icon('menu')}</button><div class="breadcrumb"><span>${ui.page==='home'?'Handshake':ui.mode==='provider'?'Кабинет провайдера':'Личный кабинет'}</span>${icon('chevron',10)}<strong>${pageTitles[ui.page]}</strong>${ui.mode==='provider'?'<span class="mode-label">Демо-роль</span>':''}</div><div class="top-actions"><button class="appearance-button header-preference" data-action="language" aria-label="Язык интерфейса" title="Язык интерфейса">${icon('globe',20)}</button><button class="appearance-button header-preference" data-action="theme" aria-label="Оформление" title="Оформление">${icon({light:'sun',dark:'moon',auto:'monitor'}[getPreferences().theme],20)}</button><button class="location-button" data-action="location">${icon('pin',14)}${ui.location}${icon('down',11)}</button><span class="separator"></span><button class="icon-button" data-action="notifications" aria-label="Уведомления">${icon('bell',19)}${state.notifications.some(n=>!n.read&&(!n.orderId||state.orders.some(o=>o.id===n.orderId&&o.owner==='me')))?'<i class="notification-dot"></i>':''}</button><button class="profile-button" data-action="profile"><span class="avatar">НТ</span><span>Мой профиль</span>${icon('down',12)}</button></div></header>`; }
+const pageTitles = {access:'Доступ и проверка',home:'Главная',exchange:'Обмен',orders:'Мои заявки',history:'История',feed:'Входящие заявки',directions:'Моя ликвидность',responses:'Мои предложения',statistics:'Сделки и доход',vault:'Доходный vault',shared:'Заявка по ссылке'};
+function header() { return `<header class="topbar"><button class="icon-button mobile-menu" data-action="menu" aria-label="Открыть меню">${icon('menu')}</button><div class="header-city-compact">${headerCityLogo(language(),{variant:'compact'})}</div><div class="breadcrumb"><span>${ui.page==='home'?'Handshake':ui.mode==='provider'?'Кабинет провайдера':'Личный кабинет'}</span>${icon('chevron',10)}<strong>${pageTitles[ui.page]}</strong>${ui.mode==='provider'?'<span class="mode-label">Демо-роль</span>':''}</div><div class="top-actions"><button class="appearance-button header-preference" data-action="language" aria-label="Язык интерфейса" title="Язык интерфейса">${icon('globe',20)}</button><button class="appearance-button header-preference" data-action="theme" aria-label="Оформление" title="Оформление">${icon({light:'sun',dark:'moon',auto:'monitor'}[getPreferences().theme],20)}</button><button class="location-button" data-action="location">${icon('pin',14)}${ui.location}${icon('down',11)}</button><span class="separator"></span><button class="icon-button" data-action="notifications" aria-label="Уведомления">${icon('bell',19)}${state.notifications.some(n=>!n.read&&(!n.orderId||state.orders.some(o=>o.id===n.orderId&&o.owner==='me')))?'<i class="notification-dot"></i>':''}</button><button class="profile-button" data-action="profile" aria-label="${accessSummary(access).registered?'Мой профиль':language()==='en'?'Sign in by invitation':'Войти по приглашению'}"><span class="avatar" aria-hidden="true">${icon('user',20)}</span><span>${accessSummary(access).registered?'Мой профиль':language()==='en'?'Sign in':'Войти'}</span>${icon('down',12)}</button></div></header>`; }
 const demoTag = '<span class="demo-tag"><i></i>Демо-режим</span>';
 function intro(title,subtitle,eyebrow='ОБМЕН ПО ВАШИМ ПРАВИЛАМ',action='') {return `<div class="intro"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div>${action||demoTag}</div>`;}
+function displayRate(rate,give,receive){
+  if(!Number.isFinite(rate)||rate<=0)return '—';
+  const {base,quote}=rateDisplay(rate);
+  return `${fmtAmount(base)} ${give} = ${fmtAmount(quote)} ${receive}`;
+}
+function pricingControl(){
+  if(composer.sharedRequest)return '';
+  const en=language()==='en',manual=composer.pricingMode==='manual';
+  const rate=composer.manualRate??referenceRate(composer.give.currency,composer.receive.currency);
+  const base=composer.rateBase||rateDisplay(referenceRate(composer.give.currency,composer.receive.currency)).base;
+  return `<section class="pricing-choice" data-no-i18n><div class="pricing-choice-head"><div><strong>${manual?(en?'My exchange rate':'Свой курс'):(en?'Best available rate':'Лучший курс автоматически')}</strong></div><button type="button" class="switch ${manual?'on':''}" role="switch" aria-checked="${manual}" aria-label="${en?'Set my exchange rate':'Задать свой курс'}" aria-describedby="pricing-hint" data-action="pricing-toggle"></button></div><p id="pricing-hint">${manual?(en?'We will look for this rate or better. A stricter rate may take longer to match.':'Будем искать этот курс или лучше. Более строгие условия могут увеличить время поиска.'):(en?'We compare compatible requests and select the best rate available in the demo. You confirm the final amounts before exchanging.':'Сравним совместимые заявки и выберем лучший доступный курс в демо. Итоговые суммы вы подтвердите до обмена.')}</p>${manual?`<label class="pricing-input-row"><span>${fmtAmount(base)} ${composer.give.currency} =</span><input id="client-rate" class="input-field" type="text" inputmode="decimal" autocomplete="off" aria-label="${en?'My exchange rate':'Свой курс'}" value="${Number.isFinite(rate)?fmtRate(rate*base):''}" required><span>${composer.receive.currency}</span></label>`:''}</section>`;
+}
 function fillModeControl() {
   return `<section class="fill-choice" aria-label="Способ исполнения заявки"><div class="fill-choice-head"><div><strong>${composer.partial?'Можно частями':'Только целиком'}</strong></div><button type="button" id="partial-toggle" class="switch ${composer.partial?'on':''}" role="switch" aria-checked="${composer.partial}" aria-label="Разрешить обмен частями" aria-describedby="partial-hint" data-action="partial-toggle"></button></div><p id="partial-hint">Разрешите обмен частями: заявку смогут закрыть несколько участников. Так подходящий обмен может найтись быстрее.</p></section>`;
 }
@@ -168,7 +191,7 @@ function problemModal(order) {
 }
 
 function exchangePage() {
-  return `${intro('Найдите прямой обмен','Задайте сумму, валюты и удобный способ расчёта.')}<div class="exchange-layout"><section class="card exchange-card" aria-label="Конструктор обмена"><div class="card-top"><h2>Новый обмен</h2><span class="card-label"><i class="online-dot"></i>Клиенты + провайдеры</span></div>${sharedComposerNote()}<form id="exchange-form">${endpointEditor(composer.give,'give')}<div class="swap-row"><button class="swap-button" type="button" data-action="swap" aria-label="Поменять направление обмена">${icon('exchange',16)}</button></div>${endpointEditor(composer.receive,'receive')}<div class="rate-row"><span>${icon('info',12)}<span id="reference-rate">1 ${composer.give.currency} ≈ ${fmt(amountFor(1,composer.give.currency,composer.receive.currency))} ${composer.receive.currency}</span></span><span>Демонстрационный курс</span></div>${fillModeControl()}<button class="primary-button full" type="submit"><span>Найти обмен</span>${icon('arrow',17)}</button><div class="form-note">${icon('lock',11)}Реквизиты не нужны для создания заявки</div><div id="composer-error"></div></form></section><aside class="guide-column"><div class="guide-card"><h2>Ваша заявка.<br>Идеальное совпадение.</h2><p>Без поиска по чатам и бесконечного сравнения обменников.</p>${currencyPairArt(composer.give.currency,composer.receive.currency)}<ol class="steps"><li><span class="step-num">1</span><div><strong>Задайте условия</strong><p>Что, сколько и как хотите обменять.</p></div></li><li><span class="step-num">2</span><div><strong>Мы найдём совпадение</strong><p>Встречные заявки подбираются автоматически.</p></div></li><li><span class="step-num">3</span><div><strong>Подтвердите обмен</strong><p>Для наличных также предложат свою цену.</p></div></li></ol></div><div class="trust-card"><span class="trust-icon">${icon('shield',20)}</span><div><strong>Ваши данные — под контролем</strong><p>Проверка зависит от условий сделки</p></div><button class="icon-button" data-action="kyc" aria-label="О проверке личности">${icon('chevron',14)}</button></div></aside></div><div class="section-head"><h2>Мои заявки <span class="count-inline">${activeOrders().length}</span></h2><button class="text-button" data-action="navigate" data-page="orders">Все заявки ${icon('arrow',13)}</button></div><div class="order-list">${activeOrders().slice(0,3).map(orderRow).join('')||empty('Пока нет активных заявок','Создайте первый обмен в форме выше.')}</div>`;
+  return `${intro('Найдите прямой обмен','Задайте сумму, валюты и удобный способ расчёта.')}<div class="exchange-layout"><section class="card exchange-card" aria-label="Конструктор обмена"><div class="card-top"><h2>Новый обмен</h2><span class="card-label"><i class="online-dot"></i>Клиенты + провайдеры</span></div>${sharedComposerNote()}<form id="exchange-form">${endpointEditor(composer.give,'give')}<div class="swap-row"><button class="swap-button" type="button" data-action="swap" aria-label="Поменять направление обмена">${icon('exchange',16)}</button></div>${endpointEditor(composer.receive,'receive')}<div class="rate-row"><span>${icon('info',12)}<span id="reference-rate">${displayRate(referenceRate(composer.give.currency,composer.receive.currency),composer.give.currency,composer.receive.currency)}</span></span><span>Демонстрационный курс</span></div>${pricingControl()}${fillModeControl()}<button class="primary-button full" type="submit"><span>Найти обмен</span>${icon('arrow',17)}</button><div class="form-note">${icon('lock',11)}Реквизиты не нужны для создания заявки</div><div id="composer-error"></div></form></section><aside class="guide-column"><div class="guide-card"><h2>Ваша заявка.<br>Идеальное совпадение.</h2><p>Без поиска по чатам и бесконечного сравнения обменников.</p>${currencyPairArt(composer.give.currency,composer.receive.currency)}<ol class="steps"><li><span class="step-num">1</span><div><strong>Задайте условия</strong><p>Что, сколько и как хотите обменять.</p></div></li><li><span class="step-num">2</span><div><strong>Мы найдём совпадение</strong><p>Встречные заявки подбираются автоматически.</p></div></li><li><span class="step-num">3</span><div><strong>Подтвердите обмен</strong><p>Для наличных также предложат свою цену.</p></div></li></ol></div><div class="trust-card"><span class="trust-icon">${icon('shield',20)}</span><div><strong>Ваши данные — под контролем</strong><p>Проверка клиентов и провайдеров</p></div><button class="icon-button" data-action="kyc" aria-label="О проверке личности">${icon('chevron',14)}</button></div></aside></div><div class="section-head"><h2>Мои заявки <span class="count-inline">${activeOrders().length}</span></h2><button class="text-button" data-action="navigate" data-page="orders">Все заявки ${icon('arrow',13)}</button></div><div class="order-list">${activeOrders().slice(0,3).map(orderRow).join('')||empty('Пока нет активных заявок','Создайте первый обмен в форме выше.')}</div>`;
 }
 function ordersPage(history=false) {
   let orders=history?ownOrders():activeOrders();
@@ -185,7 +208,7 @@ function requestCard(order) {
 }
 function time(timestamp) {return formatTime(timestamp,language());}
 function notificationMessage(notice) {
-  return notice.message.replace(/([0-9][0-9\s\u00a0\u202f]*(?:,\d+)?) ([A-Z]{3,4})(?=[.\s]|$)/g,(_,amount,code)=>`${fmt(parseNumber(amount,'ru'))} ${code}`);
+  return notice.message.replace(/([0-9][0-9\s\u00a0\u202f]*(?:,\d+)?) ([A-Z]{3,4})(?=[.\s]|$)/g,(_,amount,code)=>`${fmtAmount(parseNumber(amount,'ru'))} ${code}`);
 }
 function feedPage() {
   const orders=providerOrders();
@@ -218,7 +241,7 @@ function quoteModal(order) {
   if(isRate&&Number.isFinite(quoteDraft.rate)){quoteDraft.rate=Number(quoteDraft.rate.toFixed(8));const scale=['USDT','USDC'].includes(order.receive.currency)?1e6:100;quoteDraft.amount=Math.round(giveAmount*quoteDraft.rate*scale)/scale;}
   return modalShell('Предложить свою цену',`Заявка ${esc(shortId(order.id))} · клиент не увидит ваш профиль`,`${pairDetail(order)}<form id="quote-form">${order.partial?`<label class="field-label" for="quote-give">Часть заявки, ${order.give.currency}</label><input class="input-field" id="quote-give" inputmode="decimal" value="${fmtAmount(giveAmount,order.give.currency)}" required><p class="partial-quote-note">Можно предложить обмен на часть суммы. Остаток продолжит поиск.</p>`:''}<div class="quote-mode" role="group" aria-label="Способ задания цены">${[['amount','Итоговая сумма'],['rate','Курс обмена']].map(([mode,label])=>`<button type="button" data-action="quote-mode" data-mode="${mode}" aria-pressed="${quoteDraft.inputMode===mode}" class="${quoteDraft.inputMode===mode?'active':''}">${label}</button>`).join('')}</div><label class="field-label" for="quote-value">${isRate?`Курс: 1 ${order.give.currency} = … ${order.receive.currency}`:`Клиент получит, ${order.receive.currency}`}</label><input class="input-field quote-value" id="quote-value" inputmode="decimal" value="${isRate?fmtRate(quoteDraft.rate):fmtAmount(quoteDraft.amount,order.receive.currency)}" required><div class="quote-calculation" id="quote-calculation" aria-live="polite">${quoteSummary(order)}</div><label class="field-label" for="quote-income">Ваш доход, USDT</label><input class="input-field" id="quote-income" inputmode="decimal" value="${fmtAmount(quoteDraft.incomeUSDT,'USDT')}" required><p class="inset-notice">Включён в итоговую цену. Используется только для вашей статистики и не виден клиенту.</p><div class="info-box"><strong>Цена действует 5 минут</strong>Укажите итоговую сумму с учётом всех ваших комиссий. Объём и обеспечение резервируются после принятия клиентом.</div><button class="primary-button" type="submit">Отправить предложение ${icon('arrow',15)}</button></form>`);
 }
-function quoteSummary(order) {return `<span>${t('Клиент получит')}</span><strong>${Number.isFinite(quoteDraft.amount)?money(quoteDraft.amount,order.receive.currency):'—'}</strong><small>${t('Клиент отдаст')}: ${Number.isFinite(quoteDraft.giveAmount)?money(quoteDraft.giveAmount,order.give.currency):'—'} · 1 ${order.give.currency} = ${fmtRate(quoteDraft.rate)||'—'} ${order.receive.currency}</small>`;}
+function quoteSummary(order) {return `<span>${t('Клиент получит')}</span><strong>${Number.isFinite(quoteDraft.amount)?money(quoteDraft.amount,order.receive.currency):'—'}</strong><small>${t('Клиент отдаст')}: ${Number.isFinite(quoteDraft.giveAmount)?money(quoteDraft.giveAmount,order.give.currency):'—'} · ${displayRate(quoteDraft.rate,order.give.currency,order.receive.currency)}</small>`;}
 function updateQuoteSummary(order) {const el=$('#quote-calculation');if(el)el.innerHTML=quoteSummary(order);}
 function shareModal(order) {
   shareDraft.url=buildRequestLink(order,{includeAddress:shareDraft.includeAddress});
@@ -250,12 +273,15 @@ window.addEventListener('hashchange',()=>{readSharedRoute();render();window.scro
 function syncSidebar() { const sidebar=$('.sidebar'); if(sidebar) sidebar.inert=window.innerWidth<=700&&!ui.mobile; }
 window.addEventListener('resize',syncSidebar);
 let stopCityRotation = () => {};
+let stopCurrencyOrbits = () => {};
 function render() {
   stopCityRotation();
-  const content=ui.page==='shared'?sharedRequestPage(ui.sharedRequest,sharingHelpers(),localSharedOrder()):ui.page==='vault'?vaultPage(state,vaultHelpers()):ui.page==='home'?homePage(language()):ui.page==='exchange'?exchangePage():ui.page==='orders'?ordersPage():ui.page==='history'?ordersPage(true):ui.page==='feed'?feedPage():ui.page==='directions'?directionsPage():ui.page==='statistics'?statisticsPage():responsesPage();
+  stopCurrencyOrbits();
+  const content=ui.page==='access'?renderAccessPage(access,{language:language(),role:ui.mode,icon,esc,error:accessError}):ui.page==='shared'?sharedRequestPage(ui.sharedRequest,sharingHelpers(),localSharedOrder()):ui.page==='vault'?vaultPage(state,vaultHelpers()):ui.page==='home'?homePage(language()):ui.page==='exchange'?exchangePage():ui.page==='orders'?ordersPage():ui.page==='history'?ordersPage(true):ui.page==='feed'?feedPage():ui.page==='directions'?directionsPage():ui.page==='statistics'?statisticsPage():responsesPage();
   $('#app').innerHTML=`${sidebar()}<div class="workspace">${header()}<main class="content">${content}<footer class="page-footer"><span>${icon('lock',10)}Демо: данные хранятся только в этом браузере</span><span>Сделки и курсы демонстрационные</span><button data-action="terms">Как работает Handshake ${icon('arrow',10)}</button></footer></main></div>`;
   localize($('#app'),language());
   stopCityRotation=startCityRotation($('#app'));
+  stopCurrencyOrbits=startCurrencyOrbits($('#app'));
   document.title=t('Handshake — обмен по вашим правилам');
   document.querySelector('meta[name=description]').content=t('Handshake — обмен по вашим правилам. Создайте заявку, найдите встречный обмен или получите предложение наличных.');
   fitAmounts();
@@ -290,7 +316,7 @@ function renderModal() {
   if(type==='payment') html=paymentModal(state.orders.find(o=>o.id===id),ui.modal.side);
   if(type==='problem') html=problemModal(state.orders.find(o=>o.id===id));
   if(type==='share') html=shareModal(state.orders.find(o=>o.id===id));
-  if(type==='direction') html=modalShell('Новое направление','Настройте условия, чтобы получать подходящие заявки.',`<form id="direction-form">${endpointEditor(directionDraft.give,'give','direction')}${endpointEditor(directionDraft.receive,'receive','direction')}<div class="form-grid"><div><label class="field-label" for="direction-min">Минимум, ${directionDraft.give.currency}</label><input class="input-field" id="direction-min" name="min" inputmode="decimal" data-draft-field="min" value="${fmt(directionDraft.min)}" required></div><div><label class="field-label" for="direction-max">Максимум, ${directionDraft.give.currency}</label><input class="input-field" id="direction-max" name="max" inputmode="decimal" data-draft-field="max" value="${fmt(directionDraft.max)}" required></div><div class="span-2"><label class="field-label" for="direction-available">Доступный объём, ${directionDraft.give.currency}</label><input class="input-field" id="direction-available" name="available" inputmode="decimal" data-draft-field="available" value="${fmt(directionDraft.available)}" required></div></div><p class="inset-notice">Хотя бы одна сторона — наличные. Суммы лимитов задаются в валюте, которую отдаёт провайдер.</p><button class="primary-button" type="submit">Добавить направление ${icon('plus',15)}</button></form>`);
+  if(type==='direction') html=modalShell('Новое направление','Настройте условия, чтобы получать подходящие заявки.',`<form id="direction-form">${endpointEditor(directionDraft.give,'give','direction')}${endpointEditor(directionDraft.receive,'receive','direction')}<div class="form-grid"><div><label class="field-label" for="direction-min">Минимум, ${directionDraft.give.currency}</label><input class="input-field" id="direction-min" name="min" inputmode="decimal" data-draft-field="min" value="${fmtAmount(directionDraft.min)}" required></div><div><label class="field-label" for="direction-max">Максимум, ${directionDraft.give.currency}</label><input class="input-field" id="direction-max" name="max" inputmode="decimal" data-draft-field="max" value="${fmtAmount(directionDraft.max)}" required></div><div class="span-2"><label class="field-label" for="direction-available">Доступный объём, ${directionDraft.give.currency}</label><input class="input-field" id="direction-available" name="available" inputmode="decimal" data-draft-field="available" value="${fmtAmount(directionDraft.available)}" required></div></div><p class="inset-notice">Хотя бы одна сторона — наличные. Суммы лимитов задаются в валюте, которую отдаёт провайдер.</p><button class="primary-button" type="submit">Добавить направление ${icon('plus',15)}</button></form>`);
   if(type==='notifications') {
     const notices=state.notifications.filter(n=>!n.orderId||state.orders.some(o=>o.id===n.orderId&&o.owner==='me'));
     html=modalShell('Уведомления','Совпадения, предложения и изменения ваших заявок.',notices.length?notices.slice(0,20).map(n=>`<button class="notification-item" data-action="notification-order" data-id="${esc(n.orderId||'')}">${icon(n.type==='quote'?'cash':n.type==='match'?'spark':'bell',18)}<span><strong>${esc(n.title)}</strong><p>${esc(notificationMessage(n))}</p><p>${time(n.createdAt)}</p></span></button>`).join(''):empty('Всё спокойно','Здесь появятся уведомления о ваших обменах.'));
@@ -298,7 +324,7 @@ function renderModal() {
   if(type==='kyc') html=modalShell('Проверка личности','Клиенты и провайдеры проходят KYC.',serviceContent('kyc'));
   if(type==='language'||type==='theme')html=modalShell(type==='language'?t('Язык интерфейса'):t('Оформление'),'',preferenceChoices(type));
   if(type==='vault'){const view=vaultModal(state,ui.modal,vaultHelpers());html=modalShell(view.title,view.subtitle,view.body);}
-  if(type==='profile') html=modalShell('Мой профиль','Демонстрационный аккаунт',`<div class="trust-card"><span class="avatar">НТ</span><div><strong>Тестовый пользователь</strong><p>Роль: ${ui.mode==='client'?'клиент':'провайдер наличных'}</p></div></div><div class="info-box">Данные сохраняются локально в этом браузере. Между устройствами и аккаунтами они не синхронизируются.</div><div class="button-row"><button class="outline-button" data-action="kyc">${icon('shield',15)}О проверке</button><button class="outline-button" data-action="reset-confirm">Начать демо заново</button></div>`);
+  if(type==='profile') html=modalShell('Мой профиль','Демонстрационный аккаунт',`<div class="trust-card"><span class="avatar" aria-hidden="true">${icon('user',24)}</span><div><strong data-no-i18n>${esc(accessSummary(access).alias||'Demo')}</strong><p>Роль: ${ui.mode==='client'?'клиент':'провайдер наличных'}</p></div></div><p class="access-profile-status" data-no-i18n>${esc(accessStatusLabel(access,language()))}</p><div class="info-box">Данные сохраняются локально в этом браузере. Между устройствами и аккаунтами они не синхронизируются.</div><div class="button-row"><button class="outline-button" data-action="kyc">${icon('shield',15)}${language()==='en'?'Verification status':'Статус проверки'}</button><button class="outline-button" data-action="notifications">${icon('bell',15)}Уведомления</button><button class="outline-button" data-action="reset-confirm">Начать демо заново</button></div>`);
   if(type==='reset-confirm') html=modalShell('Сбросить демоверсию?','',`<p class="subtle" style="line-height:1.8">Созданные в этом браузере заявки, направления и предложения будут удалены. Начальные примеры восстановятся.</p><div class="button-row"><button class="outline-button" data-action="close-modal">Оставить данные</button><button class="primary-button" data-action="reset-demo">Сбросить демо</button></div>`);
   if(type==='cancel-confirm') html=modalShell('Отменить заявку?','',`<p class="subtle" style="line-height:1.8">Подбор остановится, предложения закроются, а встречная заявка станет доступна другим клиентам.</p><div class="button-row"><button class="outline-button" data-action="order" data-id="${esc(id)}">Продолжить обмен</button><button class="primary-button" data-action="cancel-order" data-id="${esc(id)}">Отменить заявку</button></div>`);
   if(type==='location') html=modalShell('Ваш город','Будет использован для новых обменов наличными.',`<label class="field-label" for="user-city">Город</label><select class="select-field" id="user-city">${options(CITIES,ui.location)}</select><button class="primary-button" data-action="save-location">Сохранить ${icon('check',15)}</button>`);
@@ -309,27 +335,44 @@ function renderModal() {
 }
 function openModal(type,id) { focusReturn=document.activeElement; ui.modal={type,id}; renderModal(); queueMicrotask(()=>$('.modal .icon-button')?.focus()); }
 function closeModal() {ui.modal=null;renderModal();if(focusReturn?.isConnected)focusReturn.focus();}
-function navigate(page) {closeModal();if(location.hash.startsWith('#/exchange/'))history.replaceState(null,'',location.pathname+location.search);if(page==='home')ui.mode='client';ui.page=page;ui.mobile=false;render();window.scrollTo({top:0,behavior:'smooth'});}
+function navigate(page) {closeModal();if(!['home','shared','access'].includes(page)&&!canTrade(access)){ui.accessReturn={page,mode:ui.mode};page='access';}accessError='';if(location.hash.startsWith('#/exchange/'))history.replaceState(null,'',location.pathname+location.search);if(page==='home')ui.mode='client';ui.page=page;ui.mobile=false;render();window.scrollTo({top:0,behavior:'smooth'});}
 function modalError(error) {const target=$('#modal-error');if(target)target.innerHTML=`<div class="error-message" role="alert">${esc(t(error.message||error))}</div>`;else toast(error.message||error,true);}
 function newDirection(order) { directionDraft=order?{give:{...order.receive},receive:{...order.give},min:Math.max(1,Math.floor(order.minReceive/2)),max:Math.ceil(order.minReceive*2),available:Math.ceil(order.minReceive*5)}:{give:{currency:'AMD',method:'cash',city:ui.location},receive:{currency:'USDT',method:'crypto',network:'TRC20'},min:100000,max:3000000,available:5000000};openModal('direction'); }
-function recomputeComposer() {composer.minReceive=amountFor(Number.isFinite(composer.amount)&&composer.amount>=0?composer.amount:0,composer.give.currency,composer.receive.currency);}
+function recomputeComposer(resetRate=false) {
+  if(composer.sharedRequest){composer.minReceive=composer.amount*composer.sharedRequest.amount/composer.sharedRequest.minReceive;return;}
+  const reference=referenceRate(composer.give.currency,composer.receive.currency);
+  if(resetRate){composer.rateBase=rateDisplay(reference).base;composer.manualRate=Number((reference*composer.rateBase).toFixed(2))/composer.rateBase;}
+  try{const price=calculateClientPricing({...composer,minReceive:undefined},{referenceRate:reference});composer.minReceive=price.minReceive;}
+  catch{composer.minReceive=NaN;}
+}
 document.addEventListener('click',event=>{
   const el=event.target.closest('[data-action]');if(!el)return;
   const action=el.dataset.action,id=el.dataset.id;
   if(el.tagName==='A') event.preventDefault();
   try {
+    if(action==='access-demo-invite'){const input=$('[name=invite]');if(input){input.value='HANDSHAKE-DEMO';input.focus();}return;}
+    if(action==='access-submit-review'){access=submitVerification(access);persistAccess();refreshAccess();return;}
+    if(action==='access-demo-review'){access=demoReview(access,el.dataset.result);persistAccess();refreshAccess();return;}
+    if(action==='access-restart-verification'){access=restartVerification(access);accessError='';persistAccess();refreshAccess();return;}
+    if(action==='access-continue'){if(!canTrade(access))return;const next=ui.accessReturn;ui.mode=next?.mode||accessSummary(access).role;delete ui.accessReturn;navigate(next?.page||(ui.mode==='provider'?'feed':'exchange'));return;}
+    if(action==='kyc-info'){openModal('kyc');return;}
+    if(action==='kyc'||(action==='profile'&&!accessSummary(access).registered)){navigate('access');return;}
+    const gatedActions=['quote','payment','report-problem','confirm-settlement','accept-match','accept-quote','cancel-order','toggle-direction','add-direction','setup-direction','vault-enable-review','vault-disable-review','vault-withdraw-review','vault-confirm-withdrawal-review','vault-enable-confirm','vault-disable-confirm','vault-deposit-confirm','vault-withdraw-confirm','vault-confirm-withdrawal'];
+    if(gatedActions.includes(action)&&!canTrade(access)){navigate(ui.mode==='provider'?'feed':'exchange');return;}
     if(action==='navigate')navigate(el.dataset.page);
     else if(action==='home')navigate('home');
-    else if(action==='new-order'){delete composer.sharedRequest;ui.mode='client';navigate('exchange');$('#give-amount')?.focus();}
+    else if(action==='new-order'){if(composer.sharedRequest){delete composer.sharedRequest;composer.pricingMode='auto';delete composer.manualRate;recomputeComposer();}ui.mode='client';navigate('exchange');$('#give-amount')?.focus();}
     else if(action==='open-feed'){ui.mode='provider';navigate('feed');}
     else if(action==='menu'){ui.mobile=!ui.mobile;render();}
     else if(action==='mode'){ui.mode=ui.mode==='client'?'provider':'client';navigate(ui.mode==='client'?'exchange':'feed');}
     else if(action==='method'){
       const draft=el.dataset.scope==='direction'?directionDraft:composer;
+      const previousPair=draft.give.currency+'/'+draft.receive.currency;
       updateEndpoint(draft,el.dataset.side,'method',el.dataset.method,ui.location);
-      if(el.dataset.scope==='direction')renderModal();else{recomputeComposer();render();}
+      if(el.dataset.scope==='direction')renderModal();else{recomputeComposer(previousPair!==draft.give.currency+'/'+draft.receive.currency);render();}
     }
-    else if(action==='swap'){[composer.give,composer.receive]=[composer.receive,composer.give];[composer.amount,composer.minReceive]=[composer.minReceive,composer.amount];render();}
+    else if(action==='swap'){if(!Number.isFinite(composer.amount)||composer.amount<=0||!Number.isFinite(composer.minReceive)||composer.minReceive<=0||(composer.pricingMode==='manual'&&(!Number.isFinite(composer.manualRate)||composer.manualRate<=0)))throw new Error(language()==='en'?'Enter a positive amount and rate before swapping.':'Перед сменой направления укажите положительную сумму и курс.');delete composer.sharedRequest;[composer.give,composer.receive]=[composer.receive,composer.give];[composer.amount,composer.minReceive]=[composer.minReceive,composer.amount];composer.manualRate=Number.isFinite(composer.manualRate)&&composer.manualRate>0?1/composer.manualRate:referenceRate(composer.give.currency,composer.receive.currency);composer.rateBase=rateDisplay(composer.manualRate).base;recomputeComposer();render();}
+    else if(action==='pricing-toggle'){composer.pricingMode=composer.pricingMode==='manual'?'auto':'manual';if(composer.pricingMode==='manual'){const rate=Number.isFinite(composer.manualRate)&&composer.manualRate>0?composer.manualRate:referenceRate(composer.give.currency,composer.receive.currency);composer.rateBase=rateDisplay(rate).base;if(!Number.isFinite(composer.manualRate)||composer.manualRate<=0)composer.manualRate=Number((rate*composer.rateBase).toFixed(2))/composer.rateBase;}recomputeComposer();render();$('[data-action=pricing-toggle]')?.focus();}
     else if(action==='order'||action==='cancel-confirm')openModal(action,id);
     else if(action==='quote'){const order=state.orders.find(o=>o.id===id);const previous=validQuotes(order).at(-1);quoteDraft={giveAmount:previous?.giveAmount||order.amount,inputMode:previous?.inputMode||'amount',amount:previous?.amount||order.minReceive,rate:previous?.rate||order.minReceive/order.amount,incomeUSDT:previous?.incomeUSDT||0};openModal('quote',id);}
     else if(action==='partial-toggle'){composer.partial=!composer.partial;render();$('#partial-toggle')?.focus();if(composer.partial)toast('Частичный обмен включён: заявку могут закрыть несколько участников.');}
@@ -345,7 +388,7 @@ document.addEventListener('click',event=>{
       const request=ui.sharedRequest;if(!request||request.snapshotStatus!=='open')throw new Error('Не удалось открыть заявку из ссылки.');
       composer={give:{...request.receive},receive:{...request.give},amount:request.minReceive,minReceive:request.amount,partial:request.partial,sharedRequest:request};ui.mode='client';navigate('exchange');
     }
-    else if(action==='clear-shared-reply'){delete composer.sharedRequest;render();}
+    else if(action==='clear-shared-reply'){delete composer.sharedRequest;composer.pricingMode='auto';delete composer.manualRate;recomputeComposer();render();}
     else if(action==='set-language'||action==='set-theme'){closeModal();setPreferences({[action==='set-language'?'language':'theme']:el.dataset.value});}
     else if(action==='vault-open'){ui.mode='provider';navigate('vault');}
     else if(['vault-enable-review','vault-disable-review','vault-withdraw-review','vault-confirm-withdrawal-review'].includes(action)){
@@ -375,8 +418,8 @@ document.addEventListener('click',event=>{
     else if(action==='notifications'){state.notifications.forEach(n=>n.read=true);persist();render();openModal('notifications');}
     else if(['kyc','profile','reset-confirm','help','about','terms','location','language','theme'].includes(action))openModal(action);
     else if(action==='save-location'){ui.location=$('#user-city').value;for(const end of [composer.give,composer.receive])if(end.method==='cash'){if(end.city!==ui.location)end.address='';end.city=ui.location;};closeModal();render();toast('Город обновлён');}
-    else if(action==='reset-demo'){state=seedState();persist();ui.mode='client';navigate('exchange');toast('Демонстрационные данные восстановлены');}
-  }catch(error){modalError(error);}
+    else if(action==='reset-demo'){state=seedState();access=createAccessState();persist();persistAccess();ui.mode='client';navigate('home');toast('Демонстрационные данные восстановлены');}
+  }catch(error){if(ui.page==='access'){accessError=error;render();}else modalError(error);}
 });
 document.addEventListener('input',event=>{
   const el=event.target;
@@ -388,7 +431,7 @@ document.addEventListener('input',event=>{
     composer.amount=parseAmount(el.value);
     if(Number.isFinite(composer.amount)&&composer.amount>=0){recomputeComposer();$('#receive-amount').value=fmtAmount(composer.minReceive,composer.receive.currency);}
   }
-  if(el.id==='receive-amount')composer.minReceive=parseAmount(el.value);
+  if(el.id==='client-rate'){composer.manualRate=parseAmount(el.value)/(composer.rateBase||1);recomputeComposer();$('#receive-amount').value=fmtAmount(composer.minReceive);fitAmounts();}
   if(el.id==='give-amount'||el.id==='receive-amount')fitAmounts();
   if(el.dataset.draftField) directionDraft[el.dataset.draftField]=parseAmount(el.value);
   if(el.dataset.filter&&el.type!=='checkbox')ui[el.dataset.filter]=el.value;
@@ -399,25 +442,33 @@ document.addEventListener('change',event=>{
   if(el.dataset.preference) { setPreferences({[el.dataset.preference]:el.value}); return; }
   if(el.dataset.endpoint){
     const draft=el.dataset.scope==='direction'?directionDraft:composer;
+    const previousPair=draft.give.currency+'/'+draft.receive.currency;
     try { updateEndpoint(draft,el.dataset.endpoint,el.dataset.field,el.value,ui.location); }
     catch(error) { if(el.dataset.scope==='direction')renderModal();else render();toast(error.message,true);return; }
-    if(el.dataset.scope==='direction')renderModal();else{recomputeComposer();render();}
+    if(el.dataset.scope==='direction')renderModal();else{recomputeComposer(previousPair!==draft.give.currency+'/'+draft.receive.currency);render();}
   }
   if(el.dataset.filter){ui[el.dataset.filter]=el.type==='checkbox'?el.checked:el.value;render();}
 });
 document.addEventListener('submit',event=>{
   event.preventDefault();
   try{
+    const form=event.target;
+    if(form.id.startsWith('access-')){
+      if(form.id==='access-invite-form')access=redeemInvite(access,form.elements.namedItem('invite').value);
+      if(form.id==='access-account-form'){const role=form.elements.namedItem('role').value;access=completeAccount(access,{alias:form.elements.namedItem('alias').value,role});if(ui.accessReturn&&ui.accessReturn.mode!==role&&!composer.sharedRequest)ui.accessReturn={page:role==='provider'?'feed':'exchange',mode:role};ui.mode=role;}
+      if(form.id==='access-verification-form')access=completeVerificationStep(access,form.dataset.step,{confirmed:form.elements.namedItem('confirmed').checked});
+      accessError='';persistAccess();refreshAccess();return;
+    }
+    if(!canTrade(access)){navigate(ui.mode==='provider'?'feed':'exchange');return;}
     if(event.target.id==='exchange-form'){
-      composer.amount=parseAmount($('#give-amount').value);composer.minReceive=parseAmount($('#receive-amount').value);
-      const order=composer.sharedRequest?createSharedReply(state,composer.sharedRequest,composer):createOrder(state,composer);delete composer.sharedRequest;persist();render();openModal('order',order.id);toast(order.status==='matched'?'Нашли встречную заявку — условия совпали':'Заявка создана. Ищем подходящий обмен');
+      if(!composer.sharedRequest)Object.assign(composer,calculateClientPricing({...composer,minReceive:undefined},{referenceRate:referenceRate(composer.give.currency,composer.receive.currency)}));
+      const order=composer.sharedRequest?createSharedReply(state,composer.sharedRequest,composer):createOrder(state,composer);if(composer.sharedRequest){delete composer.sharedRequest;composer.pricingMode='auto';delete composer.manualRate;recomputeComposer();}persist();render();openModal('order',order.id);toast(order.status==='matched'?'Нашли встречную заявку — условия совпали':'Заявка создана. Ищем подходящий обмен');
     }
     if(event.target.id==='vault-deposit-form'){
       const config={type:'vault',mode:'deposit',amount:parseAmount($('#vault-amount').value)};vaultModal(state,config,vaultHelpers());focusReturn=document.activeElement;ui.modal=config;renderModal();queueMicrotask(()=>$('.modal .icon-button')?.focus());
     }
     if(event.target.id==='quote-form'){
-      quoteDraft[quoteDraft.inputMode==='rate'?'rate':'amount']=parseAmount($('#quote-value').value);
-      quoteDraft.incomeUSDT=parseAmount($('#quote-income').value);
+      // Input events retain exact draft values; display rounding must not alter terms.
       submitQuote(state,ui.modal.id,quoteDraft);persist();closeModal();render();toast('Предложение отправлено клиенту');
     }
     if(event.target.id==='payment-form'){const order=state.orders.find(o=>o.id===ui.modal.id);const values=Object.fromEntries(paymentFields(order[ui.modal.side]).map(field=>[field.key,event.target.elements.namedItem(`payment-${field.key}`).value]));setPaymentDetails(state,order.id,ui.modal.side,values);persist();openModal('order',order.id);toast('Тестовые реквизиты сохранены');}
@@ -425,7 +476,7 @@ document.addEventListener('submit',event=>{
     if(event.target.id==='direction-form'){
       addDirection(state,directionDraft);persist();closeModal();ui.page='directions';render();toast('Направление добавлено');
     }
-  }catch(error){if(event.target.id==='exchange-form')$('#composer-error').innerHTML=`<div class="error-message" role="alert">${esc(t(error.message))}</div>`;else modalError(error);}
+  }catch(error){if(event.target.id.startsWith('access-')){accessError=error;render();}else if(event.target.id==='exchange-form')$('#composer-error').innerHTML=`<div class="error-message" role="alert">${esc(t(error.message))}</div>`;else modalError(error);}
 });
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape'){if(ui.modal)closeModal();else if(ui.mobile){ui.mobile=false;render();}}
@@ -446,7 +497,7 @@ document.addEventListener('preferenceschange',event=>{
   }
 });
 // Synchronize browser tabs without interrupting an in-progress form.
-window.addEventListener('storage',event=>{if(event.key===STORAGE_KEY&&event.newValue){try{const next=JSON.parse(event.newValue);if([1,2].includes(next.version)&&Array.isArray(next.orders)&&Array.isArray(next.directions)&&Array.isArray(next.notifications)){state=migrateState(next);if(ui.modal?.type==='vault'){closeModal();render();toast(language()==='en'?'Collateral changed in another tab. Review the amount again.':'Обеспечение изменилось в другой вкладке. Проверьте сумму заново.',true);return;}if(!ui.modal){render();toast('Данные обновлены в другой вкладке');}}}catch{}}});
+window.addEventListener('storage',event=>{if(event.key===ACCESS_STORAGE_KEY){access=loadAccessState(event.newValue);if(!canTrade(access)&&!['home','access','shared'].includes(ui.page)){navigate(ui.page);}else{render();renderModal();}return;}if(event.key===STORAGE_KEY&&event.newValue){try{const next=JSON.parse(event.newValue);if([1,2].includes(next.version)&&Array.isArray(next.orders)&&Array.isArray(next.directions)&&Array.isArray(next.notifications)){state=migrateState(next);if(ui.modal?.type==='vault'){closeModal();render();toast(language()==='en'?'Collateral changed in another tab. Review the amount again.':'Обеспечение изменилось в другой вкладке. Проверьте сумму заново.',true);return;}if(!ui.modal){render();toast('Данные обновлены в другой вкладке');}}}catch{}}});
 setInterval(()=>{
   if(ui.modal?.type==='order'&&!$('.modal input:focus')){
     const expired=[...document.querySelectorAll('[data-action="accept-quote"]')].some(el=>{const order=state.orders.find(o=>o.id===el.dataset.id);return !el.disabled&&order?.quotes.find(q=>q.id===el.dataset.quoteId)?.expiresAt<=Date.now();});

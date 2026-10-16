@@ -1,5 +1,5 @@
 import { BANKS, CITIES, CURRENCIES, NETWORKS } from './domain.js';
-import { formatNumber } from './i18n.js?v=20261015-vault';
+import { formatMoney } from './money-format.js';
 import { buildRequestLink, parseRequestLink, requestFingerprint, PUBLIC_REQUEST_ROOT } from './share-links.js';
 import { createQRCode } from './qr-code.js';
 
@@ -50,9 +50,7 @@ function cardEndpoint(endpoint, amount, language, includeAddress) {
   } else if (method === 'cash') detail = city || text.unavailable;
   else if (method === 'crypto' && NETWORKS.includes(source.network)) detail = `${text.network} ${source.network}`;
   const validAmount = positive(amount);
-  const amountText = validAmount === null ? '—' : ['USDT', 'USDC'].includes(currency)
-    ? new Intl.NumberFormat(language === 'en' ? 'en-US' : 'ru-RU', { maximumFractionDigits: 6 }).format(validAmount)
-    : formatNumber(validAmount, language);
+  const amountText = validAmount === null ? '—' : formatMoney(validAmount, language);
   return {
     amount: validAmount, amountText,
     currency, method, methodLabel: text[method] || text.unavailable, detail, city,

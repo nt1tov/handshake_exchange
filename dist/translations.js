@@ -1,5 +1,17 @@
 export const translations = {
   "en": {
+    "Доступ и проверка": "Access and verification",
+    "Войти": "Sign in",
+    "Проверка клиентов и провайдеров": "Clients and providers are verified",
+    "Ориентировочно": "Estimated amount",
+    "Выберите автоматический или свой курс.": "Choose the automatic rate or your own rate.",
+    "Выберите валюты обмена.": "Choose the currencies to exchange.",
+    "Свой курс: укажите число.": "My exchange rate: enter a number.",
+    "Свой курс: укажите положительное конечное число.": "My exchange rate: enter a positive finite number.",
+    "Демонстрационный курс: укажите число.": "Demo exchange rate: enter a number.",
+    "Демонстрационный курс: укажите положительное конечное число.": "Demo exchange rate: enter a positive finite number.",
+    "Курс слишком мал для отображения.": "The rate is too small to display.",
+
     "получаете": "you receive",
     "Handshake — обмен по вашим правилам": "Handshake — exchange on your terms",
     "Handshake — обмен по вашим правилам. Создайте заявку, найдите встречный обмен или получите предложение наличных.": "Handshake — exchange on your terms. Create a request, find a matching exchange or get a cash offer.",
@@ -37,7 +49,6 @@ export const translations = {
     "Демо-роль": "Demo role",
     "Уведомления": "Notifications",
     "Мой профиль": "My profile",
-    "НТ": "NT",
     "Демо-режим": "Demo mode",
     "ОБМЕН ПО ВАШИМ ПРАВИЛАМ": "EXCHANGE ON YOUR TERMS",
     "Договориться проще.": "A better way to agree.",

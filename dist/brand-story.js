@@ -36,17 +36,19 @@ const stories = {
 
 export function brandStory(language = 'ru') {
   const story = stories[language] || stories.ru;
-  const pair = nextCityPair();
-  const city = index => `<span class="brand-story-city"><span data-story-city="${pair[index]}">${cityLabel(pair[index], language)}</span></span>`;
   return `<section class="brand-story" aria-labelledby="brand-story-title" data-no-i18n>
-    <div class="brand-story-route" aria-hidden="true" data-city-language="${language === 'en' ? 'en' : 'ru'}">${city(0)}<span class="brand-story-arrow">→</span><span class="brand-story-wordmark">handshake.</span><span class="brand-story-arrow">→</span>${city(1)}</div>
     <div class="brand-story-copy"><span class="eyebrow">${story.eyebrow}</span><h2 id="brand-story-title">${story.title}</h2><p>${story.history}</p><p>${story.today}</p><div class="brand-story-links"><a href="${story.sourceUrl}" target="_blank" rel="noopener noreferrer">${story.source}</a><button type="button" class="text-button" data-action="about">${story.about}</button></div></div>
   </section>`;
 }
 
-export function startCityRotation(root) {
-  const route = root.querySelector('.brand-story-route');
-  if (!route) return () => {};
+export function headerCityLogo(language = 'ru', { variant = 'sidebar' } = {}) {
+  const pair = nextCityPair();
+  const mode = variant === 'compact' ? 'compact' : 'sidebar';
+  const city = index => `<span class="header-city-logo__city" aria-hidden="true"><span data-story-city="${pair[index]}">${cityLabel(pair[index], language)}</span></span>`;
+  return `<a class="brand header-city-logo header-city-logo--${mode}" href="#" data-action="home" aria-label="${language === 'en' ? 'Handshake — home' : 'Handshake — главная'}" data-no-i18n data-city-language="${language === 'en' ? 'en' : 'ru'}">${city(0)}<span class="header-city-logo__brand" aria-hidden="true"><img src="./favicon.svg" alt=""><span>handshake<span class="brand-period">.</span></span></span>${city(1)}</a>`;
+}
+
+function rotateCities(route) {
   const slots = [...route.querySelectorAll('[data-story-city]')];
   const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let disposed = false, visible = false, timer;
@@ -97,4 +99,9 @@ export function startCityRotation(root) {
     motion.removeEventListener('change', update);
     document.removeEventListener('visibilitychange', update);
   };
+}
+
+export function startCityRotation(root) {
+  const cleanups = [...root.querySelectorAll('.header-city-logo')].map(rotateCities);
+  return () => cleanups.forEach(cleanup => cleanup());
 }

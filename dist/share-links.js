@@ -1,6 +1,6 @@
 import { BANKS, CITIES, CURRENCIES, NETWORKS, orderExecution } from './domain.js';
 
-export const PUBLIC_REQUEST_ROOT = 'https://nt1tov.github.io/handshake_exchange/';
+export const PUBLIC_REQUEST_ROOT = 'https://handshake-exchange.pages.dev/';
 const MAX_INPUT_LENGTH = 4096;
 const MAX_AMOUNT = 1_000_000_000;
 const methodCodes = { bank: 'b', cash: 'c', crypto: 'x' };

@@ -52,7 +52,7 @@ test('accepted price wins over matched amount and minimum without sharing other 
   const data = buildCardData(source, { language: 'en', now });
   assert.equal(data.receive.amount, 391250);
   assert.equal(data.minimum, false);
-  assert.ok(data.caption.includes('I receive: 391,250 AMD'));
+  assert.ok(data.caption.includes('I receive: 391,250.00 AMD'));
   assert.ok(!data.caption.includes('999,999'));
   assert.ok(!data.caption.includes('at least'));
 });
@@ -91,7 +91,7 @@ test('partial exchanges share the committed amounts and a partial-fill label', (
   assert.equal(accepted.give.amount, 300);
   assert.equal(accepted.receive.amount, 117500);
   assert.ok(accepted.caption.includes('Partial fills allowed'));
-  assert.ok(accepted.caption.includes('I give: 300 USDT'));
+  assert.ok(accepted.caption.includes('I give: 300.00 USDT'));
 });
 
 test('searching cards ignore stale matched quantities and malformed partial flags', () => {
@@ -130,18 +130,20 @@ test('card boundary rejects unknown endpoint data and invalid numeric values', (
   assert.ok(!data.caption.includes('contact@example.com'));
 });
 
-test('crypto payouts preserve all six decimals, including a one-micro-unit amount', () => {
+test('crypto cards display two decimals while preserving exact source amounts', () => {
   const source = order({
     give: { currency: 'USDC', method: 'crypto', network: 'Solana' }, amount: 12.345678,
     receive: { currency: 'USDT', method: 'crypto', network: 'TRC20' }, minReceive: 0.000001,
   });
   const english = buildCardData(source, { language: 'en', now });
-  assert.equal(english.give.amountText, '12.345678');
-  assert.equal(english.receive.amountText, '0.000001');
-  assert.ok(english.caption.includes('0.000001 USDT'));
+  assert.equal(english.give.amount, 12.345678);
+  assert.equal(english.receive.amount, 0.000001);
+  assert.equal(english.give.amountText, '12.35');
+  assert.equal(english.receive.amountText, '0.00');
+  assert.ok(english.caption.includes('0.00 USDT'));
   const russian = buildCardData(source, { language: 'ru', now });
-  assert.equal(russian.give.amountText, '12,345678');
-  assert.equal(russian.receive.amountText, '0,000001');
+  assert.equal(russian.give.amountText, '12,35');
+  assert.equal(russian.receive.amountText, '0,00');
 });
 
 test('an explicitly supplied public request URL is included in the caption', () => {

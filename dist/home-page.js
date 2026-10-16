@@ -1,4 +1,5 @@
-import { brandStory } from './brand-story.js?v=20261016-cities';
+import { brandStory } from './brand-story.js?v=20261016-access';
+import { currencyOrbits } from './currency-orbits.js?v=20261016-access';
 
 const copy = {
   ru: {
@@ -38,7 +39,7 @@ export function homePage(language = 'ru') {
   return `<div class="home-page" data-no-i18n>
     <section class="home-hero" aria-labelledby="home-title">
       <div class="home-hero-copy"><div class="eyebrow">${text.eyebrow}</div><h1 id="home-title">${text.title}</h1><p class="home-lead">${text.description}</p><div class="home-actions"><button type="button" class="primary-button" data-action="new-order">${text.create}<span aria-hidden="true">↗</span></button><button type="button" class="outline-button" data-action="open-feed">${text.provider}</button></div><div class="home-demo"><span class="demo-tag"><i></i>${text.demo}</span><span>${text.demoNote}</span></div></div>
-      <div class="home-hero-art" aria-hidden="true"><div class="home-art-orbit"></div><div class="home-art-orbit home-art-orbit-inner"></div><span class="home-art-currency home-art-ruble">₽</span><span class="home-art-currency home-art-euro">€</span><span class="home-art-currency home-art-crypto">₮</span><div class="home-art-logo"><img src="./favicon.svg" width="84" height="84" alt=""><span>handshake<span class="home-art-period">.</span></span></div><span class="home-art-spark">✦</span></div>
+      ${currencyOrbits()}
     </section>
     ${brandStory(language)}
     <section class="home-facts" aria-label="${text.factsLabel}">${text.facts.map(fact => `<article class="home-fact"><span class="home-fact-value" aria-hidden="true">${fact.value}</span><div><h2>${fact.title}</h2><p>${fact.text}</p></div></article>`).join('')}</section>

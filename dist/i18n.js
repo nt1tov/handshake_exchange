@@ -1,4 +1,4 @@
-import { translations } from './translations.js?v=20261015-vault';
+import { translations } from './translations.js?v=20261016-access';
 
 export const LANGUAGES = [
   { code: 'ru', label: 'Русский', locale: 'ru-RU' },

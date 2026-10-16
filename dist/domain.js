@@ -1,5 +1,6 @@
 import { BANKS } from './bank-catalog.js';
 import { migrateVault, vaultMetrics } from './vault.js';
+import { calculateClientPricing } from './client-pricing.js';
 export { BANKS } from './bank-catalog.js';
 
 export const CURRENCIES = [
@@ -122,6 +123,10 @@ export function amountFor(giveAmount, giveCurrency, receiveCurrency) {
   return roundCurrency(converted, receiveCurrency);
 }
 
+export function referenceRate(giveCurrency, receiveCurrency) {
+  return currency(receiveCurrency).rateUSD / currency(giveCurrency).rateUSD;
+}
+
 function roundCurrency(amount, code) {
   currency(code);
   const precision = cryptoCurrencies.has(code) ? 6 : 2;
@@ -135,7 +140,7 @@ function roundCurrency(amount, code) {
 export function formatAmount(amount) {
   const value = Number(amount);
   if (!Number.isFinite(value)) return '—';
-  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 }
 
 function currencyStep(code) {
@@ -149,14 +154,20 @@ function directedRound(amount, code, up = false) {
   return (up ? Math.ceil(scaled - epsilon) : Math.floor(scaled + epsilon)) / factor;
 }
 
+function minimumAtRate(order, amount, minimum) {
+  if (order.pricingMode !== 'manual' || amount <= 0) return minimum;
+  return Math.max(minimum, calculateClientPricing({ ...order, amount }).minReceive);
+}
+
 function splitExecution(order, value) {
   const giveAmount = number(roundCurrency(number(value, 'Сумма отправки'), order.give.currency), 'Сумма отправки');
   if (giveAmount > order.amount) throw new Error('Часть обмена не может превышать сумму заявки.');
   if (giveAmount < order.amount && order.partial !== true) throw new Error('Клиент разрешил только обмен всей суммы.');
-  const minReceive = giveAmount === order.amount ? order.minReceive
+  const proportionalMinimum = giveAmount === order.amount ? order.minReceive
     : directedRound(order.minReceive * (giveAmount / order.amount), order.receive.currency, true);
+  const minReceive = minimumAtRate(order, giveAmount, proportionalMinimum);
   const remainingAmount = roundCurrency(order.amount - giveAmount, order.give.currency);
-  const remainingMinReceive = roundCurrency(order.minReceive - minReceive, order.receive.currency);
+  const remainingMinReceive = minimumAtRate(order, remainingAmount, Math.max(0, roundCurrency(order.minReceive - minReceive, order.receive.currency)));
   if (minReceive <= 0 || (remainingAmount > 0 && remainingMinReceive <= 0)) {
     throw new Error('Для такой части слишком мал остаток заявки. Выберите другой объём.');
   }
@@ -174,14 +185,15 @@ function executionFits(order, giveAmount, receiveAmount) {
 function matchExecution(order, candidate) {
   if (candidate.id === order.id || candidate.owner === order.owner || candidate.status !== 'searching'
     || sameCurrency(candidate) || invalidBankCurrency(candidate) || !sameEndpoint(order.give, candidate.receive) || !sameEndpoint(order.receive, candidate.give)) return null;
-  let giveAmount = order.amount;
-  let receiveAmount = candidate.amount;
-  if (order.partial === true) giveAmount = Math.min(order.amount, candidate.minReceive);
-  if (giveAmount < candidate.minReceive) {
-    if (candidate.partial !== true) return null;
-    receiveAmount = directedRound(candidate.amount * (giveAmount / candidate.minReceive), candidate.give.currency);
-  }
   try {
+    const candidateMinimum = minimumAtRate(candidate, candidate.amount, candidate.minReceive);
+    let giveAmount = order.amount;
+    let receiveAmount = candidate.amount;
+    if (order.partial === true) giveAmount = Math.min(order.amount, candidateMinimum);
+    if (giveAmount < candidateMinimum) {
+      if (candidate.partial !== true) return null;
+      receiveAmount = directedRound(candidate.amount * (giveAmount / candidateMinimum), candidate.give.currency);
+    }
     executionFits(order, giveAmount, receiveAmount);
     executionFits(candidate, receiveAmount, giveAmount);
     return { giveAmount, receiveAmount };
@@ -194,7 +206,8 @@ export function findMatch(state, order) {
   if (order.status !== 'searching' || sameCurrency(order) || invalidBankCurrency(order)) return null;
   return state.orders.map(candidate => ({ candidate, execution: matchExecution(order, candidate) }))
     .filter(item => item.execution)
-    .sort((first, second) => second.execution.receiveAmount - first.execution.receiveAmount
+    .sort((first, second) => second.execution.receiveAmount / second.execution.giveAmount - first.execution.receiveAmount / first.execution.giveAmount
+      || second.execution.receiveAmount - first.execution.receiveAmount
       || first.execution.giveAmount - second.execution.giveAmount
       || first.candidate.createdAt - second.candidate.createdAt)[0]?.candidate || null;
 }
@@ -231,6 +244,8 @@ function applySplit(state, order, split, now) {
     id: makeId('HS', now), owner: order.owner, give: { ...order.give }, receive: { ...order.receive },
     amount: split.remainingAmount, minReceive: split.remainingMinReceive,
     partial: true, status: 'searching', createdAt: now, quotes: [], rootOrderId, parentOrderId: order.id,
+    ...(order.pricingMode ? { pricingMode: order.pricingMode } : {}),
+    ...(order.pricingMode === 'manual' ? { manualRate: order.manualRate } : {}),
   };
   order.rootOrderId = rootOrderId;
   order.amount = split.giveAmount;
@@ -251,11 +266,14 @@ export function orderExecution(order) {
 
 export function createOrder(state, input, now = Date.now()) {
   const sides = endpoints(input);
-  const amount = number(roundCurrency(number(input.amount, 'Сумма отправки'), sides.give.currency), 'Сумма отправки');
-  const minReceive = number(roundCurrency(number(input.minReceive ?? amountFor(amount, sides.give.currency, sides.receive.currency), 'Минимальная сумма получения'), sides.receive.currency), 'Минимальная сумма получения');
+  const pricing = input.pricingMode === undefined ? null : calculateClientPricing({ ...input, ...sides }, { referenceRate: referenceRate(sides.give.currency, sides.receive.currency) });
+  const amount = pricing?.amount ?? number(roundCurrency(number(input.amount, 'Сумма отправки'), sides.give.currency), 'Сумма отправки');
+  const minReceive = pricing?.minReceive ?? number(roundCurrency(number(input.minReceive ?? amountFor(amount, sides.give.currency, sides.receive.currency), 'Минимальная сумма получения'), sides.receive.currency), 'Минимальная сумма получения');
   const order = {
     id: makeId('HS', now), owner: 'me', ...sides, amount, minReceive,
     partial: input.partial === true, status: 'searching', createdAt: now, quotes: [],
+    ...(pricing ? { pricingMode: pricing.pricingMode } : {}),
+    ...(pricing?.pricingMode === 'manual' ? { manualRate: pricing.manualRate } : {}),
   };
   let match;
   if (input.matchTargetId !== undefined) {
@@ -311,10 +329,11 @@ export function isDirectionCompatible(direction, order) {
   if (!directionEndpointsFit(direction, order)) return false;
   const capacity = Math.min(direction.max, direction.available);
   if (!Number.isFinite(capacity) || capacity <= 0 || direction.min > capacity) return false;
-  if (order.minReceive <= capacity) return true;
-  if (order.partial !== true) return false;
   try {
-    const giveAmount = directedRound(order.amount * (capacity / order.minReceive), order.give.currency);
+    const minimum = minimumAtRate(order, order.amount, order.minReceive);
+    if (minimum <= capacity) return true;
+    if (order.partial !== true) return false;
+    const giveAmount = directedRound(order.amount * (capacity / minimum), order.give.currency);
     return splitExecution(order, giveAmount).minReceive <= capacity;
   } catch {
     return false;
