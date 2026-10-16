@@ -20,11 +20,7 @@ const stories = {
     history: 'Задолго до цифровых переводов люди передавали деньги посреднику в одном городе, а получатель забирал их у его партнёра в другом. Такие расчёты опирались на доверие и договорённости между участниками.',
     today: 'Нам близка эта идея связи между людьми. Handshake помогает найти встречную заявку или предложение провайдера, сравнить итоговые суммы и договориться об обмене — с понятными правилами и прозрачными условиями.',
     source: 'Википедия',
-    sourceTitle: 'История переводов между городами',
-    sourceDescription: 'Как люди переводили деньги между городами через сеть посредников.',
-    sourceAction: 'Читать в Википедии',
     imageAlt: 'Рудольф Эрнст — «Меняла»: обмен денег за столом',
-    imageCredit: 'Р. Эрнст, «Меняла» · Wikimedia Commons',
     sourceUrl: 'https://ru.wikipedia.org/wiki/Хавала',
     about: 'Больше о Handshake',
   },
@@ -34,11 +30,7 @@ const stories = {
     history: 'Long before digital transfers, people could give money to a broker in one city while the recipient collected it from the broker’s partner in another. These arrangements relied on trust between participants.',
     today: 'That human connection inspires Handshake: find a matching request or a provider’s offer, compare the final amounts and agree on an exchange, with clear rules and transparent terms.',
     source: 'Wikipedia',
-    sourceTitle: 'A history of money transfers',
-    sourceDescription: 'How people sent money between cities through a network of brokers.',
-    sourceAction: 'Read on Wikipedia',
     imageAlt: 'The Money Changer by Rudolf Ernst: exchanging money at a table',
-    imageCredit: 'R. Ernst, The Money Changer · Wikimedia Commons',
     sourceUrl: 'https://en.wikipedia.org/wiki/Hawala',
     about: 'More about Handshake',
   },
@@ -46,20 +38,22 @@ const stories = {
 
 export function brandStory(language = 'ru') {
   const story = stories[language] || stories.ru;
-  return `<section class="brand-story" aria-labelledby="brand-story-title" data-no-i18n>
-    <div class="brand-story-copy"><span class="eyebrow">${story.eyebrow}</span><h2 id="brand-story-title">${story.title}</h2><p>${story.history}</p><p>${story.today}</p><div class="brand-story-links"><button type="button" class="text-button" data-action="about">${story.about} <span aria-hidden="true">→</span></button></div></div>
-    <figure class="wiki-preview">
-      <a class="wiki-preview__link" href="${story.sourceUrl}" target="_blank" rel="noopener noreferrer">
-        <div class="wiki-preview__art"><img src="./assets/money-changer.jpg" width="1000" height="1254" loading="lazy" decoding="async" alt="${story.imageAlt}"></div>
-          <span class="wiki-preview__source"><span class="wiki-preview__mark" aria-hidden="true">W</span>${story.source}<span class="wiki-preview__external" aria-hidden="true">↗</span></span>
-        <div class="wiki-preview__body">
-          <h3>${story.sourceTitle}</h3><p>${story.sourceDescription}</p>
-          <span class="wiki-preview__action">${story.sourceAction}<span aria-hidden="true">→</span></span>
-        </div>
-      </a>
-      <figcaption><a href="https://commons.wikimedia.org/wiki/File:Ernst_Rudolf_The_Money_Changer.jpg" target="_blank" rel="noopener noreferrer">${story.imageCredit}</a></figcaption>
-    </figure>
+  return `<section class="brand-story brand-story--text-only" aria-labelledby="brand-story-title" data-no-i18n>
+    <div class="brand-story-copy"><span class="eyebrow">${story.eyebrow}</span><h2 id="brand-story-title">${story.title}</h2><p>${story.history}</p><p>${story.today}</p><div class="brand-story-links"><button type="button" class="text-button" data-action="about">${story.about} <span aria-hidden="true">→</span></button><a class="brand-story-source" href="${story.sourceUrl}" target="_blank" rel="noopener noreferrer">${story.source} <span aria-hidden="true">↗</span></a></div></div>
   </section>`;
+}
+
+export function aboutArtwork(language = 'ru') {
+  const story = stories[language] || stories.ru;
+  const credit = language === 'en' ? 'R. Ernst, The Money Changer' : 'Р. Эрнст, «Меняла»';
+  const about = language === 'en' ? 'About us' : 'О нас';
+  return `<figure class="home-history-art">
+    <button type="button" class="home-history-link" data-action="about" aria-label="${about}">
+      <img class="home-history-image" src="./assets/money-changer.jpg" width="1000" height="1254" fetchpriority="high" decoding="async" alt="${story.imageAlt}">
+      <span class="home-history-source"><span>${about}</span><i aria-hidden="true">↗</i></span>
+    </button>
+    <figcaption class="home-history-credit"><a href="https://commons.wikimedia.org/wiki/File:Ernst_Rudolf_The_Money_Changer.jpg" target="_blank" rel="noopener noreferrer">${credit}</a></figcaption>
+  </figure>`;
 }
 
 export function headerCityLogo(language = 'ru', { variant = 'sidebar' } = {}) {

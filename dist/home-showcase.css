@@ -1,0 +1,126 @@
+.home-hero.home-showcase {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, .85fr) minmax(390px, 1.15fr);
+  align-items: center;
+  gap: 24px;
+  min-height: 390px;
+  padding: 28px;
+  border: 1px solid #d9b07c66;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #332218;
+  color: #fff8ef;
+  box-shadow: 0 12px 32px #2111081c;
+}
+.home-showcase::before, .home-showcase::after { content: ""; position: absolute; pointer-events: none; }
+.home-showcase::before { inset: -32px; z-index: -2; background: url('./assets/money-changer.jpg') center 55% / cover no-repeat; filter: blur(22px); opacity: .85; }
+.home-showcase::after { inset: 0; z-index: -1; background: linear-gradient(110deg, #20150ee8, #291b12c9 49%, #291b128a); }
+.home-showcase > * { position: relative; min-width: 0; }
+.home-showcase .home-hero-copy { max-width: 460px; }
+.home-showcase .home-hero-copy > .eyebrow { margin-bottom: 12px; color: #f4d6a8; font-size: 11px; line-height: 1.5; letter-spacing: 1px; }
+.home-showcase h1 { max-width: 440px; color: #fff8ef; font-size: clamp(32px, 3vw, 40px); line-height: 1.15; letter-spacing: -1.1px; text-wrap: balance; }
+.home-showcase .home-lead { max-width: 430px; margin-top: 14px; color: #eadfd3; font-size: 16px; line-height: 1.6; }
+.home-showcase .home-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.home-showcase .home-actions > button { min-height: 48px; padding: 12px 16px; font-size: 14px; line-height: 1.4; }
+.home-showcase .home-actions .primary-button { color: #27331d; background: #c4ed78; border-color: #c4ed78; gap: 12px; }
+.home-showcase .home-actions .primary-button:hover { background: #d4f698; border-color: #d4f698; }
+.home-showcase .home-actions .outline-button { color: #fff8ef; background: #2b1d16b3; border-color: #e9d4bba6; }
+.home-showcase .home-actions .outline-button:hover { color: #fff; background: #594231; border-color: #fff0d7; }
+.home-showcase .home-actions > button:focus-visible { outline: 3px solid #fff0cf; outline-offset: 4px; }
+.home-showcase .home-demo { display: block; max-width: none; margin-top: 14px; color: #eadfd3; font-size: 13px; line-height: 1.5; }
+
+.home-showcase .home-hero-visuals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: center; width: 100%; max-width: 520px; justify-self: center; }
+.home-showcase .home-hero-art.currency-orbits { display: block; width: 100%; min-width: 0; max-width: 270px; aspect-ratio: 1.06; margin: 10px 0; --home-orbit: #e9d8b859; --home-accent-wash: #a5b47b33; --home-purple-wash: #30203588; }
+.home-showcase .currency-orbits__satellite { width: 46px; height: 54px; }
+.home-showcase .currency-orbits__card { gap: 4px; border-color: #e2cdb5; border-radius: 13px; background: #fff5e9; color: #543b6e; box-shadow: 0 4px 0 #22142770; }
+.home-showcase .currency-orbits__card[data-currency="USD"], .home-showcase .currency-orbits__card[data-currency="USDT"], .home-showcase .currency-orbits__card[data-currency="KZT"] { background: #d1eea3; color: #314824; }
+.home-showcase .currency-orbits__glyph { font-size: 25px; min-height: 25px; }
+.home-showcase .currency-orbits__code { font-size: 10px; letter-spacing: .3px; }
+.home-showcase .currency-orbits__card[data-currency="AED"] .currency-orbits__glyph { font-size: 18px; line-height: 25px; }
+.home-showcase .currency-orbits .home-art-logo { gap: 10px; }
+.home-showcase .currency-orbits .home-art-logo img { width: 60px; height: 60px; border-radius: 19px; }
+.home-showcase .currency-orbits .home-art-logo > span { color: #fff8ef; font-size: 21px; }
+.home-showcase .home-art-period { color: #c4ed78; }
+
+.home-history-art { min-width: 0; width: 100%; margin: 0; }
+.home-history-link { display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid #e8d5bc99; border-radius: 12px; background: #fff4e5; color: #33251b; font: inherit; text-align: left; box-shadow: 0 8px 24px #130b0859; }
+.home-history-image { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 1254; object-fit: contain; }
+.home-history-source { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 6px; font-size: 13px; line-height: 1.35; font-weight: 550; }
+.home-history-source > b { flex-shrink: 0; font-family: Georgia, serif; font-size: 23px; line-height: 1; font-weight: 400; }
+.home-history-source > span { min-width: 0; }
+.home-history-source > i { flex-shrink: 0; font-size: 17px; line-height: 1; font-style: normal; }
+.home-history-link:hover { background: #fffaf1; border-color: #fff0d7; }
+.home-history-credit { margin-top: 4px; color: #eadfd3; font-size: 12px; line-height: 1.4; text-align: center; }
+.home-history-credit a { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; color: inherit; text-decoration: underline; text-decoration-color: #eadfd359; text-underline-offset: 3px; }
+.home-history-credit a:hover { color: #fff; text-decoration-color: currentColor; }
+.home-history-link:focus-visible, .home-history-credit a:focus-visible { outline: 3px solid #fff0cf; outline-offset: 4px; }
+
+.home-page .brand-story--text-only { --ink: inherit; --muted: inherit; --purple-ink: inherit; display: block; padding: 26px 28px; border-color: var(--line); background: var(--surface); color: var(--ink); box-shadow: none; }
+.home-page .brand-story--text-only::before, .home-page .brand-story--text-only::after { display: none; }
+.brand-story--text-only .brand-story-copy { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; text-shadow: none; }
+.brand-story--text-only .brand-story-copy > .eyebrow, .brand-story--text-only .brand-story-copy > h2, .brand-story--text-only .brand-story-links { grid-column: 1 / -1; }
+.brand-story--text-only .brand-story-copy h2 { margin: 8px 0 14px; font-size: 25px; }
+.brand-story--text-only .brand-story-copy p { margin-top: 0; font-size: 14px; line-height: 1.75; }
+.brand-story--text-only .brand-story-links { margin-top: 14px; }
+.brand-story--text-only .brand-story-links button { min-height: 44px; font-size: 14px; }
+.brand-story--text-only .brand-story-source { display: inline-flex; align-items: center; min-height: 44px; color: var(--purple-ink); font-size: 14px; text-decoration: underline; text-underline-offset: 4px; }
+.brand-story.brand-story--text-only .brand-story-links button:hover { color: var(--ink); }
+.brand-story.brand-story--text-only .brand-story-links button:focus-visible { outline-color: var(--purple-ink); }
+
+@media (min-width: 701px) and (max-width: 1100px) {
+  .home-hero.home-showcase { grid-template-columns: minmax(0, 1fr) minmax(300px, .95fr); gap: 20px; padding: 24px; }
+  .home-showcase .home-hero-visuals { gap: 12px; }
+  .home-showcase .currency-orbits__satellite { width: 36px; height: 44px; }
+  .home-showcase .currency-orbits__glyph { font-size: 20px; min-height: 20px; }
+  .home-showcase .currency-orbits__card[data-currency="AED"] .currency-orbits__glyph { font-size: 15px; line-height: 20px; }
+  .home-showcase .currency-orbits .home-art-logo img { width: 44px; height: 44px; border-radius: 14px; }
+  .home-showcase .currency-orbits .home-art-logo > span { display: none; }
+  .home-history-source > b { display: none; }
+}
+
+@media (min-width: 701px) and (max-width: 980px) {
+  .home-hero.home-showcase { grid-template-columns: minmax(0, 1fr); min-height: 0; gap: 18px; }
+  .home-showcase .home-hero-visuals { grid-row: 1; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); max-width: 360px; gap: 14px; }
+  .home-showcase .home-hero-copy { grid-row: 2; max-width: none; }
+  .home-showcase h1 { max-width: 100%; font-size: 32px; }
+  .home-showcase .home-lead { max-width: 100%; }
+  .brand-story--text-only .brand-story-copy { display: block; }
+  .brand-story--text-only .brand-story-copy p + p { margin-top: 12px; }
+}
+
+@media (max-width: 700px) {
+  .home-hero.home-showcase { grid-template-columns: minmax(0, 1fr); gap: 12px; min-height: 0; padding: 16px; border-radius: 17px; }
+  .home-showcase .home-hero-visuals { grid-row: 1; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 12px; max-width: 350px; }
+  .home-showcase .home-hero-copy { grid-row: 2; width: 100%; max-width: none; }
+  .home-showcase .home-hero-copy > .eyebrow { margin-bottom: 8px; font-size: 11px; line-height: 1.5; letter-spacing: .7px; }
+  .home-showcase h1 { max-width: 440px; font-size: clamp(32px, 8vw, 36px); line-height: 1.15; letter-spacing: -.8px; }
+  .home-showcase .home-lead { max-width: none; margin-top: 10px; font-size: 16px; line-height: 1.5; }
+  .home-showcase .home-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 16px; }
+  .home-showcase .home-actions > button { width: 100%; min-height: 48px; justify-content: center; padding: 11px 14px; font-size: 15px; }
+  .home-showcase .home-demo { margin-top: 10px; font-size: 13px; line-height: 1.5; }
+  .home-showcase .home-hero-art.currency-orbits { max-width: none; width: 100%; aspect-ratio: 1.06; margin: 12px 0; }
+  .home-showcase .currency-orbits__satellite { width: 34px; height: 42px; }
+  .home-showcase .currency-orbits__card { gap: 3px; border-radius: 10px; box-shadow: 0 3px 0 #22142770; }
+  .home-showcase .currency-orbits__glyph { font-size: 20px; min-height: 20px; }
+  .home-showcase .currency-orbits__code { font-size: 10px; letter-spacing: 0; }
+  .home-showcase .currency-orbits__card[data-currency="AED"] .currency-orbits__glyph { font-size: 15px; line-height: 20px; }
+  .home-showcase .currency-orbits .home-art-logo img { width: 36px; height: 36px; border-radius: 12px; }
+  .home-showcase .currency-orbits .home-art-logo > span { display: none; }
+  .home-history-source { gap: 7px; min-height: 44px; padding: 9px 5px; font-size: 14px; }
+  .home-history-source > b { font-size: 20px; }
+  .home-history-source > i { font-size: 15px; }
+  .home-history-credit { font-size: 12px; line-height: 1.3; }
+  .home-history-credit a { min-height: 44px; }
+  .home-page .brand-story--text-only { padding: 22px 18px; }
+  .brand-story--text-only .brand-story-copy { display: block; }
+  .brand-story--text-only .brand-story-copy h2 { font-size: 24px; }
+  .brand-story--text-only .brand-story-copy p { margin-top: 12px; font-size: 15px; line-height: 1.75; }
+}
+@media (max-width: 370px) {
+  .home-hero.home-showcase { padding: 14px; gap: 10px; }
+  .home-showcase .home-hero-visuals { gap: 10px; }
+  .home-history-source > b { display: none; }
+  .home-showcase .currency-orbits .home-art-logo img { width: 32px; height: 32px; border-radius: 10px; }
+}
