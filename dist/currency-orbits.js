@@ -81,8 +81,9 @@ export function startCurrencyOrbits(root) {
     const visibleCodes = cards.map(item => item.dataset.currency);
     queue = queue.filter(code => !visibleCodes.includes(code));
     if (!queue.length) queue = shuffled(CURRENCIES.map(item => item.code).filter(code => !visibleCodes.includes(code)));
-    const currency = CURRENCIES.find(item => item.code === queue.shift());
-    if (!currency) return;
+    const nextCode = queue.shift();
+    const currency = CURRENCIES.find(item => item.code === nextCode);
+    if (!currency) { schedule(); return; }
     try {
       await animate(card, [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(.88)' }], { duration: 220, easing: 'ease-in', fill: 'forwards' });
       if (!canRun()) return;
@@ -100,7 +101,15 @@ export function startCurrencyOrbits(root) {
     if (canRun()) { frame = requestAnimationFrame(tick); schedule(); }
   };
   const observer = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; update(); }, { threshold: .1 });
-  const resize = new ResizeObserver(() => { width = art.clientWidth; height = art.clientHeight; update(); });
+  const resize = new ResizeObserver(() => {
+    const nextWidth = art.clientWidth, nextHeight = art.clientHeight;
+    if (width === nextWidth && height === nextHeight) return;
+    const wasSized = width > 0 && height > 0;
+    width = nextWidth;
+    height = nextHeight;
+    if (wasSized && width > 0 && height > 0) paint();
+    else update();
+  });
   observer.observe(art);
   resize.observe(art);
   motion.addEventListener('change', update);
