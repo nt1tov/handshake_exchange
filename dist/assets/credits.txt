@@ -4,4 +4,4 @@ Source: https://commons.wikimedia.org/wiki/File:Ernst_Rudolf_The_Money_Changer.j
 Image: https://upload.wikimedia.org/wikipedia/commons/1/1d/Ernst_Rudolf_The_Money_Changer.jpg
 Public domain artwork and faithful reproduction (PD-Art), as marked by Wikimedia Commons.
 Used as a thematic illustration for the Wikipedia article preview; not an image from that article.
-The original file is unchanged; the website crops its display using CSS object-fit.
+The original file is unchanged; the website shows the full painting with CSS object-fit:contain and uses a blurred duplicate as a backdrop.

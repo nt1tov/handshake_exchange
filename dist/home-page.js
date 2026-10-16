@@ -1,4 +1,4 @@
-import { brandStory } from './brand-story.js?v=20261016-wiki';
+import { brandStory } from './brand-story.js?v=20261016-wiki-banner';
 import { currencyOrbits } from './currency-orbits.js?v=20261016-orbits2';
 
 const copy = {

@@ -22,7 +22,7 @@ const stories = {
     source: 'Википедия',
     sourceTitle: 'История переводов между городами',
     sourceDescription: 'Как люди переводили деньги между городами через сеть посредников.',
-    sourceAction: 'Читать статью',
+    sourceAction: 'Читать в Википедии',
     imageAlt: 'Рудольф Эрнст — «Меняла»: обмен денег за столом',
     imageCredit: 'Р. Эрнст, «Меняла» · Wikimedia Commons',
     sourceUrl: 'https://ru.wikipedia.org/wiki/Хавала',
@@ -36,7 +36,7 @@ const stories = {
     source: 'Wikipedia',
     sourceTitle: 'A history of money transfers',
     sourceDescription: 'How people sent money between cities through a network of brokers.',
-    sourceAction: 'Read the article',
+    sourceAction: 'Read on Wikipedia',
     imageAlt: 'The Money Changer by Rudolf Ernst: exchanging money at a table',
     imageCredit: 'R. Ernst, The Money Changer · Wikimedia Commons',
     sourceUrl: 'https://en.wikipedia.org/wiki/Hawala',
@@ -51,8 +51,8 @@ export function brandStory(language = 'ru') {
     <figure class="wiki-preview">
       <a class="wiki-preview__link" href="${story.sourceUrl}" target="_blank" rel="noopener noreferrer">
         <div class="wiki-preview__art"><img src="./assets/money-changer.jpg" width="1000" height="1254" loading="lazy" decoding="async" alt="${story.imageAlt}"></div>
-        <div class="wiki-preview__body">
           <span class="wiki-preview__source"><span class="wiki-preview__mark" aria-hidden="true">W</span>${story.source}<span class="wiki-preview__external" aria-hidden="true">↗</span></span>
+        <div class="wiki-preview__body">
           <h3>${story.sourceTitle}</h3><p>${story.sourceDescription}</p>
           <span class="wiki-preview__action">${story.sourceAction}<span aria-hidden="true">→</span></span>
         </div>
