@@ -7,7 +7,6 @@ const copy = {
     title: 'Обмен через рукопожатие',
     description: 'Находим встречные заявки и предложения провайдеров для вашего обмена.',
     create: 'Создать заявку',
-    provider: 'Кабинет провайдера',
     demo: 'Демо · без реальных переводов',
     factsLabel: 'Принципы Handshake',
     facts: [
@@ -21,7 +20,6 @@ const copy = {
     title: 'Exchange with a handshake',
     description: 'Find matching requests and provider offers for your currency exchange.',
     create: 'Create a request',
-    provider: 'Provider workspace',
     demo: 'Demo · no real transfers',
     factsLabel: 'Handshake principles',
     facts: [
@@ -36,8 +34,9 @@ export function homePage(language = 'ru') {
   const text = copy[language] || copy.ru;
   return `<div class="home-page" data-no-i18n>
     <section class="home-hero home-showcase" aria-labelledby="home-title">
-      <div class="home-hero-copy"><div class="eyebrow">${text.eyebrow}</div><h1 id="home-title">${text.title}</h1><p class="home-lead">${text.description}</p><div class="home-actions"><button type="button" class="primary-button" data-action="new-order">${text.create}<span aria-hidden="true">↗</span></button><button type="button" class="outline-button" data-action="open-feed">${text.provider}</button></div><div class="home-demo">${text.demo}</div></div>
-      <div class="home-hero-visuals">${currencyOrbits()}${aboutArtwork(language)}</div>
+      ${currencyOrbits()}
+      <div class="home-hero-copy"><div class="eyebrow">${text.eyebrow}</div><h1 id="home-title">${text.title}</h1><p class="home-lead">${text.description}</p><div class="home-actions"><button type="button" class="primary-button" data-action="new-order">${text.create}<span aria-hidden="true">↗</span></button></div><div class="home-demo">${text.demo}</div></div>
+      ${aboutArtwork(language)}
     </section>
     ${brandStory(language)}
     <section class="home-facts" aria-label="${text.factsLabel}">${text.facts.map(fact => `<article class="home-fact"><span class="home-fact-value" aria-hidden="true">${fact.value}</span><div><h2>${fact.title}</h2><p>${fact.text}</p></div></article>`).join('')}</section>

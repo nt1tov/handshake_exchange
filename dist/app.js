@@ -8,7 +8,7 @@ import { vaultPage, vaultSummaryCard, vaultModal } from './vault-ui.js';
 import { createOrderCard } from './share-card.js';
 import { serviceContent } from './service-content.js';
 import { currencyPairArt } from './currency-art.js';
-import { homePage } from './home-page.js?v=20261016-home-showcase';
+import { homePage } from './home-page.js?v=20261018-hero-layout';
 import { headerCityLogo, startCityRotation } from './brand-story.js?v=20261016-home-showcase';
 import { startCurrencyOrbits } from './currency-orbits.js?v=20261016-orbits2';
 import { formatMoney } from './money-format.js';
